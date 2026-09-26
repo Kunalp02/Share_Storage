@@ -1,15 +1,21 @@
 services:
   execution:
-    build: ./execution-service
+    build:
+      context: .
+      dockerfile: execution-service/Dockerfile
     env_file: ./execution-service/.env
     ports:
       - "8765:8765"
   execution-worker:
-    build: ./execution-service
+    build:
+      context: .
+      dockerfile: execution-service/Dockerfile
     command: ["agent-execution-worker"]
     env_file: ./execution-service/.env
   storage:
-    build: ./storage-service
+    build:
+      context: .
+      dockerfile: storage-service/Dockerfile
     env_file: ./storage-service/.env
     ports:
       - "8770:8770"

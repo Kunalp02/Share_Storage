@@ -4,6 +4,8 @@ from typing import Annotated
 
 from fastapi import Depends, Header
 
+from platform_auth import AuthError, PlatformPrincipal
+
 from agent_execution.core.container import ApplicationContainer, get_container
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.services.agent_execution_service import AgentExecutionService
@@ -32,14 +34,18 @@ def get_deployment_service(
     return container.deployment_service
 
 
-def get_bearer_token(authorization: Annotated[str | None, Header()] = None) -> str:
-    if not authorization:
-        raise ServiceError("UNAUTHORIZED", "Authorization bearer token is required.", 401)
-    prefix = "Bearer "
-    token = authorization[len(prefix):] if authorization.startswith(prefix) else authorization
-    if not token.strip():
-        raise ServiceError("UNAUTHORIZED", "Authorization bearer token is required.", 401)
-    return token
+async def get_platform_principal(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> PlatformPrincipal:
+    try:
+        return await container.platform_auth.authenticate(authorization)
+    except AuthError as exc:
+        raise ServiceError(exc.code, exc.message, exc.status_code) from exc
+
+
+def get_bearer_token(principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)]) -> str:
+    return principal.token
 
 
 def get_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:

@@ -4,10 +4,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from platform_auth import PlatformPrincipal
 
 from agent_execution.api.controller import ApiController
-from agent_execution.api.dependencies import get_bearer_token, get_thread_service
-from agent_execution.infrastructure.identity import caller_label
+from agent_execution.api.dependencies import get_platform_principal, get_thread_service
 from agent_execution.schemas.threads import (
     Channel,
     CreateThreadRequest,
@@ -33,10 +33,14 @@ class ThreadController(ApiController):
         agent_id: UUID,
         body: CreateThreadRequest,
         service: Annotated[ThreadService, Depends(get_thread_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
     ) -> ThreadResponse:
         return await service.create(
-            agent_id, body, channel=Channel.STUDIO, bearer_token=token, triggered_by=caller_label(token)
+            agent_id,
+            body,
+            channel=Channel.STUDIO,
+            bearer_token=principal.token,
+            triggered_by=principal.username or principal.subject,
         )
 
     async def create_legacy(
@@ -44,19 +48,23 @@ class ThreadController(ApiController):
         agent_id: UUID,
         body: CreateThreadRequest,
         service: Annotated[ThreadService, Depends(get_thread_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
     ) -> ThreadResponse:
-        return await self.create(agent_id, body, service, token)
+        return await self.create(agent_id, body, service, principal)
 
     async def resolve(
         self,
         agent_id: UUID,
         body: ResolveThreadRequest,
         service: Annotated[ThreadService, Depends(get_thread_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
     ) -> ThreadResponse:
         return await service.resolve(
-            agent_id, body.resolved_thread_id(), body.mode, token, caller_label(token)
+            agent_id,
+            body.resolved_thread_id(),
+            body.mode,
+            principal.token,
+            principal.username or principal.subject,
         )
 
     async def get(
@@ -64,17 +72,17 @@ class ThreadController(ApiController):
         agent_id: UUID,
         thread_id: UUID,
         service: Annotated[ThreadService, Depends(get_thread_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
     ) -> ThreadResponse:
-        return await service.get(agent_id, thread_id, token)
+        return await service.get(agent_id, thread_id, principal.token)
 
     async def list_threads(
         self,
         agent_id: UUID,
         service: Annotated[ThreadService, Depends(get_thread_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
         execution_type: ExecutionType | None = Query(default=None, alias="executionType"),
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> list[ThreadResponse]:
-        return await service.list(agent_id, execution_type, token, limit, offset)
+        return await service.list(agent_id, execution_type, principal.token, limit, offset)

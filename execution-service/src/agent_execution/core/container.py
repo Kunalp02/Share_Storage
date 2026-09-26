@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from platform_auth import PlatformTokenVerifier, parse_codes
+
 from agent_execution.agents.graph.context import AgentGraphContext
 from agent_execution.infrastructure.auth.service_token_provider import ServiceAuthTokenProvider
 from agent_execution.infrastructure.conversation_store.factory import create_conversation_history_store
@@ -28,6 +30,7 @@ class ApplicationContainer:
     database: Database = field(init=False)
     http_pool: HttpClientPool = field(init=False)
     token_provider: ServiceAuthTokenProvider = field(init=False)
+    platform_auth: PlatformTokenVerifier = field(init=False)
     platform: PlatformClients = field(init=False)
     graph_context: AgentGraphContext = field(init=False)
     threads: ThreadRepository = field(init=False)
@@ -43,6 +46,13 @@ class ApplicationContainer:
         self.database = Database(self.settings.database_url())
         self.http_pool = HttpClientPool(self.settings)
         self.token_provider = ServiceAuthTokenProvider(self.settings, self.http_pool.auth)
+        self.platform_auth = PlatformTokenVerifier(
+            configured=bool(self.settings.auth_service_base_url.strip()),
+            http=self.http_pool.auth,
+            me_path=self.settings.auth_me_path,
+            cache_ttl_seconds=self.settings.auth_principal_cache_seconds,
+            required_permissions=parse_codes(self.settings.auth_required_permissions),
+        )
         self.platform = PlatformClients.from_pool(
             self.http_pool, self.token_provider, verify_ssl=self.settings.verify_ssl
         )

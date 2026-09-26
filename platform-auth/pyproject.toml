@@ -1,0 +1,21 @@
+[project]
+name = "ccil-platform-auth"
+version = "1.0.0"
+description = "Validate the existing platform bearer token for Python services"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0"]
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
