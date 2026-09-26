@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+
+from agent_execution.agents.graph.builder import build_execution_graph
+from agent_execution.agents.graph.context import AgentGraphContext
+from agent_execution.agents.graph.routing import route_after_llm
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.schemas.runtime import (
+    AgentMemoryScope,
+    KnowledgeBaseMode,
+    KnowledgeBaseRef,
+    MemoryConfig,
+    ModelConfig,
+    RuntimeManifest,
+)
+from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
+from agent_execution.services.conversation_memory_service import ConversationMemoryService
+from agent_execution.services.conversation_models import ConversationHistory, ConversationTurn, MemoryContext
+from agent_execution.services.deployment_service import hash_api_key
+from agent_execution.services.prompt_composition_service import PromptCompositionService
+from agent_execution.services.run_policy import pins_manifest, status_after_failure
+from agent_execution.schemas.runs import RunStatus
+from agent_execution.services.thread_service import ThreadService
+from agent_execution.infrastructure.conversation_store.memory_store import InMemoryConversationHistoryStore
+
+
+def _manifest(**kwargs) -> RuntimeManifest:
+    manifest = RuntimeManifest(
+        agent_id=uuid4(),
+        name="Test Agent",
+        status="Draft",
+        system_prompt="You are helpful.",
+        model=ModelConfig(model_id=uuid4(), model_identifier="gpt-4o-mini"),
+        memory=MemoryConfig(enabled=True, scope=AgentMemoryScope.SESSION),
+    )
+    for key, value in kwargs.items():
+        setattr(manifest, key, value)
+    return manifest
+
+
+def test_memory_service_requires_session():
+    settings = SimpleNamespace(conversation_max_turn_pairs=10, conversation_max_chars=8000, memory_cache_ttl_seconds=30)
+    service = ConversationMemoryService(settings, InMemoryConversationHistoryStore())
+    with pytest.raises(ServiceError) as exc:
+        service.validate_context(
+            MemoryConfig(enabled=True, scope=AgentMemoryScope.SESSION),
+            MemoryContext(session_id=None),
+        )
+    assert exc.value.code == "MEMORY_CONTEXT_REQUIRED"
+
+
+def test_history_trim_respects_turn_pairs_and_chars():
+    history = ConversationHistory(turns=[ConversationTurn("user", "x" * 50) for _ in range(8)])
+    trimmed, truncated = history.trim(max_turn_pairs=2, max_chars=100_000)
+    assert len(trimmed.turns) == 4
+    assert truncated is True
+    trimmed, truncated = history.trim(max_turn_pairs=10, max_chars=60)
+    assert truncated is True
+    assert sum(len(turn.content) for turn in trimmed.turns) <= 60
+
+
+def test_route_after_llm():
+    assert route_after_llm({"has_tools": False}) == "persist_memory"
+    assert route_after_llm({"has_tools": True, "tool_calls": [], "tool_round": 0}) == "persist_memory"
+    assert route_after_llm({"has_tools": True, "tool_calls": [{}], "tool_round": 1, "max_tool_rounds": 5}) == "run_tools"
+    assert route_after_llm({"has_tools": True, "tool_calls": [{}], "tool_round": 5, "max_tool_rounds": 5}) == "finalize_answer"
+
+
+def test_prompt_includes_files_and_knowledge():
+    manifest = _manifest(
+        knowledge_bases=[
+            KnowledgeBaseRef(knowledge_base_id=uuid4(), knowledge_base_name="Policies", mode=KnowledgeBaseMode.CONTEXT)
+        ]
+    )
+    prompt = PromptCompositionService.compose(
+        manifest,
+        "Previous conversation",
+        ["KB: Policies\n[1] claim"],
+        "Attached files:\n\nFile notes.txt:\nhello",
+    )
+    assert "Previous conversation" in prompt
+    assert "Policies" in prompt
+    assert "notes.txt" in prompt
+
+
+def test_production_threads_pin_manifest_and_retries_requeue():
+    assert pins_manifest(ExecutionType.PRODUCTION) is True
+    assert pins_manifest(ExecutionType.TEST) is False
+    assert status_after_failure(1, 3) == RunStatus.QUEUED
+    assert status_after_failure(3, 3) == RunStatus.FAILED
+
+
+def test_api_key_hash_is_stable():
+    assert hash_api_key("ak_test") == hash_api_key("ak_test")
+    assert hash_api_key("ak_test") != hash_api_key("ak_other")
+
+
+def test_graph_compiles():
+    context = AgentGraphContext.__new__(AgentGraphContext)
+    assert build_execution_graph(context) is not None
+
+
+class _Repo:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    async def insert(self, **kwargs):
+        self.rows.append(kwargs)
+
+
+class _Manifests:
+    def __init__(self, published: bool) -> None:
+        self.published = published
+
+    async def resolve(self, agent_id, bearer_token, *, revision_id=None, published_only=False):
+        if published_only and not self.published:
+            raise ServiceError("AGENT_NOT_PUBLISHED", "Production execution requires a published agent.", 400)
+        manifest = _manifest(status="Published" if self.published else "Draft")
+        manifest.agent_id = agent_id
+        return manifest
+
+
+@pytest.mark.asyncio
+async def test_studio_test_thread_does_not_snapshot_draft():
+    repo = _Repo()
+    settings = SimpleNamespace(test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT")
+    service = ThreadService(settings, repo, _Manifests(published=False))
+    await service.create(
+        uuid4(),
+        CreateThreadRequest(execution_type=ExecutionType.TEST),
+        channel=Channel.STUDIO,
+        bearer_token="token",
+        triggered_by="builder",
+    )
+    assert repo.rows[0]["manifest_snapshot"] is None
+    assert repo.rows[0]["execution_type"] == "TEST"
+
+
+@pytest.mark.asyncio
+async def test_production_thread_rejects_unpublished_agent():
+    service = ThreadService(
+        SimpleNamespace(test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT"),
+        _Repo(),
+        _Manifests(published=False),
+    )
+    with pytest.raises(ServiceError) as exc:
+        await service.create(
+            uuid4(),
+            CreateThreadRequest(execution_type=ExecutionType.PRODUCTION),
+            channel=Channel.STUDIO,
+            bearer_token="token",
+            triggered_by="builder",
+        )
+    assert exc.value.code == "AGENT_NOT_PUBLISHED"

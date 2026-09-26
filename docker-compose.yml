@@ -1,0 +1,15 @@
+services:
+  execution:
+    build: ./execution-service
+    env_file: ./execution-service/.env
+    ports:
+      - "8765:8765"
+  execution-worker:
+    build: ./execution-service
+    command: ["agent-execution-worker"]
+    env_file: ./execution-service/.env
+  storage:
+    build: ./storage-service
+    env_file: ./storage-service/.env
+    ports:
+      - "8770:8770"
