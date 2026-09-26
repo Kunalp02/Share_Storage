@@ -26,4 +26,6 @@ The dev server listens on port 5173 and proxies:
 - `/platform/execution` to `EXECUTION_SERVICE_URL`
 - `/platform/storage` to `STORAGE_SERVICE_URL`
 
+Point each URL at the host that already answers that service. If `curl http://172.19.204.37:8504/api/v1/agents` works, set `AGENT_CONFIG_URL=http://172.19.204.37:8504`. The browser still calls `http://127.0.0.1:5173/platform/agents/api/v1/agents`. A 500 on that address means the proxy target is down or still the default `127.0.0.1`. Restart `npm run dev` after editing `.env`.
+
 The file bytes are uploaded from the browser to the presigned storage URL. MinIO must allow that browser origin on `PUT`.

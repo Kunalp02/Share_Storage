@@ -7,6 +7,16 @@ export default defineConfig(({ mode }) => {
     target,
     changeOrigin: true,
     rewrite: (path) => path.replace(new RegExp(`^${prefix}`), ""),
+    configure: (server) => {
+      server.on("error", (error, _req, res) => {
+        if (!res || res.headersSent || typeof res.writeHead !== "function") return;
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          code: "UPSTREAM_UNREACHABLE",
+          message: `Could not reach ${target}. Set that service URL in studio-ui/.env and restart npm run dev. ${error.message}`,
+        }));
+      });
+    },
   });
   return {
     plugins: [react()],
