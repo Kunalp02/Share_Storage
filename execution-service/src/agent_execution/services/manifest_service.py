@@ -217,13 +217,22 @@ class RagContextService:
             return [], []
 
         async def fetch_one(kb: KnowledgeBaseRef) -> tuple[str | None, dict | None]:
+            label = kb.knowledge_base_name or str(kb.knowledge_base_id)
             try:
                 result = await self._platform.rag_ask.ask(kb.knowledge_base_id, user_input, bearer_token)
-            except ServiceError:
-                logger.exception("RAG ask failed for kb=%s", kb.knowledge_base_id)
-                return None, None
+            except ServiceError as exc:
+                logger.warning("rag.unavailable kb=%s code=%s detail=%s", kb.knowledge_base_id, exc.code, exc)
+                return (
+                    f"KB: {label}\nKnowledge lookup is unavailable. Tell the user that something went wrong while checking this knowledge base and to try again. Do not invent sources.",
+                    {
+                        "knowledge_base_id": str(kb.knowledge_base_id),
+                        "knowledge_base_name": kb.knowledge_base_name,
+                        "error": str(exc),
+                        "code": exc.code,
+                        "trace": f"rag.unavailable:{label}:{exc.code}",
+                    },
+                )
             evidence = result.get("evidence") or []
-            label = kb.knowledge_base_name or str(kb.knowledge_base_id)
             answer = result.get("answer")
             raw_entry = {
                 "knowledge_base_id": str(kb.knowledge_base_id),

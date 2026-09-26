@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from agent_execution.agents.graph.builder import build_execution_graph
 from agent_execution.agents.graph.context import AgentGraphContext
+from agent_execution.agents.graph.nodes import AgentGraphNodes
 from agent_execution.agents.graph.routing import route_after_llm
+from agent_execution.infrastructure.platform.rag_ask_client import RagAskClient
+from agent_execution.services.manifest_service import RagContextService
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.schemas.runtime import (
     AgentMemoryScope,
@@ -156,3 +161,63 @@ async def test_production_thread_rejects_unpublished_agent():
             triggered_by="builder",
         )
     assert exc.value.code == "AGENT_NOT_PUBLISHED"
+
+
+@pytest.mark.asyncio
+async def test_rag_ask_connection_failure_is_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://rag.test") as http:
+        client = RagAskClient(http)
+        with pytest.raises(ServiceError) as exc:
+            await client.ask(uuid4(), "what is the policy", "token")
+    assert exc.value.code == "RAG_UNAVAILABLE"
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_context_kb_outage_asks_the_model_and_records_a_trace():
+    kb_id = uuid4()
+
+    class _RagAsk:
+        async def ask(self, knowledge_base_id, question, bearer_token):
+            raise ServiceError("RAG_UNAVAILABLE", "RAG ask service is unreachable.", 503)
+
+    manifest = _manifest(
+        knowledge_bases=[
+            KnowledgeBaseRef(knowledge_base_id=kb_id, knowledge_base_name="Policies", mode=KnowledgeBaseMode.CONTEXT)
+        ]
+    )
+    blocks, raw = await RagContextService(SimpleNamespace(rag_ask=_RagAsk())).fetch_context(
+        manifest, "what is the policy", "token"
+    )
+    assert "something went wrong" in blocks[0]
+    assert "Do not invent sources." in blocks[0]
+    assert raw[0]["trace"] == "rag.unavailable:Policies:RAG_UNAVAILABLE"
+    assert raw[0]["code"] == "RAG_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_tool_outage_returns_a_user_message_for_the_model():
+    class _Tools:
+        async def run(self, manifest, name, args, bearer_token, user_input):
+            raise ServiceError("RAG_UNAVAILABLE", "RAG ask service is unreachable.", 503)
+
+    nodes = AgentGraphNodes(SimpleNamespace(tool_service=_Tools()))
+    manifest = _manifest()
+    state = {
+        "manifest": manifest.model_dump(mode="json"),
+        "messages": [{"role": "user", "content": "what is the policy"}],
+        "user_input": "what is the policy",
+        "tool_round": 0,
+        "tool_calls": [{"id": "call_1", "name": "rag_ask", "arguments": {"question": "policy"}}],
+        "tool_results": [],
+        "bearer_token": "token",
+    }
+    update = await nodes.run_tools(state)
+    assert update["steps"] == ["run_tools:r1", "tool.failed:rag_ask:RAG_UNAVAILABLE"]
+    payload = json.loads(update["tool_results"][0]["output"])
+    assert payload["status"] == "unavailable"
+    assert "Something went wrong" in payload["tell_user"]
+    assert update["messages"][-1]["role"] == "tool"
