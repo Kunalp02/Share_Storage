@@ -5,11 +5,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from agent_execution.api.controller import ApiController
-from agent_execution.api.dependencies import get_app_container
-from agent_execution.core.container import ApplicationContainer
-from agent_execution.core.exceptions import ServiceError
-from agent_execution.settings import Settings, get_settings
+from storage_service.api.controller import ApiController
+from storage_service.api.dependencies import get_artifact_service
+from storage_service.application.artifact_service import ArtifactService
+from storage_service.core.exceptions import ServiceError
+from storage_service.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +20,11 @@ class HealthController(ApiController):
         router.get("/health/ready", tags=["health"])(self.ready)
 
     async def live(self, settings: Annotated[Settings, Depends(get_settings)]) -> dict:
-        return {
-            "status": "ok",
-            "service": settings.app_name,
-            "runtime": "langgraph",
-            "maxInflightRuns": settings.max_inflight_runs,
-        }
+        return {"status": "ok", "service": settings.app_name}
 
-    async def ready(self, container: Annotated[ApplicationContainer, Depends(get_app_container)]) -> dict:
+    async def ready(self, service: Annotated[ArtifactService, Depends(get_artifact_service)]) -> dict:
         try:
-            await container.database.ping()
+            await service.ping()
         except Exception as exc:
             logger.exception("readiness.failed")
             raise ServiceError("NOT_READY", "Database is unavailable.", 503) from exc

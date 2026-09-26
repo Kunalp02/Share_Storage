@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from agent_execution.schemas.runs import CreateDeploymentRequest, DeploymentResp
 from agent_execution.schemas.threads import RetentionPolicy
 from agent_execution.services.manifest_service import ManifestService
 
+logger = logging.getLogger(__name__)
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 
@@ -53,6 +55,13 @@ class DeploymentService:
             revision_id=manifest.revision_id or request.revision_id,
             api_key_hash=hash_api_key(api_key),
             retention_policy=retention.value,
+        )
+        logger.info(
+            "deployment.created deploymentId=%s agentId=%s slug=%s revisionId=%s",
+            deployment_id,
+            agent_id,
+            slug,
+            manifest.revision_id or request.revision_id,
         )
         return DeploymentResponse(
             deployment_id=deployment_id,

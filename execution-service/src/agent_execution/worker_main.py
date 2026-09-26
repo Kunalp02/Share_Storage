@@ -4,14 +4,15 @@ import asyncio
 import logging
 
 from agent_execution.core.container import get_container, shutdown_container
+from agent_execution.logging_config import configure_logging
 from agent_execution.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
     container = get_container(settings)
     logger.info("Starting execution worker")
     try:

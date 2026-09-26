@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8770
     log_level: str = "info"
+    log_format: str = "text"
 
     postgres_url: str = ""
     s3_endpoint: str = "http://127.0.0.1:9000"

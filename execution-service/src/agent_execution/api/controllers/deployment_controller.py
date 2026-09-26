@@ -5,13 +5,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
+from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_bearer_token, get_deployment_service
 from agent_execution.schemas.runs import CreateDeploymentRequest, DeploymentResponse
 from agent_execution.services.deployment_service import DeploymentService
 
 
-class DeploymentController:
-    def __init__(self, router: APIRouter) -> None:
+class DeploymentController(ApiController):
+    def register(self, router: APIRouter) -> None:
         router.post(
             "/agents/{agent_id}/deployments",
             response_model=DeploymentResponse,

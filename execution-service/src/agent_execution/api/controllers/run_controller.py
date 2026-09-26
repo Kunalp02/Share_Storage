@@ -6,13 +6,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
+from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_bearer_token, get_execution_service
 from agent_execution.schemas.runs import CreateRunRequest, RunResponse, RunResult
 from agent_execution.services.agent_execution_service import AgentExecutionService
 
 
-class RunController:
-    def __init__(self, router: APIRouter) -> None:
+class RunController(ApiController):
+    def register(self, router: APIRouter) -> None:
         router.post("/agents/{agent_id}/threads/{thread_id}/runs", tags=["runs"])(self.create)
         router.get(
             "/agents/{agent_id}/threads/{thread_id}/runs/{run_id}",

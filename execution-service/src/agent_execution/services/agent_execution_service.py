@@ -65,9 +65,17 @@ class AgentExecutionService:
         thread = await self._threads.get_open(agent_id, thread_id)
         manifest = await self._threads.manifest_for_run(thread, bearer_token)
         if request.background:
-            row, _created = await self._insert(
+            row, created = await self._insert(
                 thread, request, manifest, Dispatch.ASYNC, bearer_token=None, worker_id=None, attempt=0
             )
+            if created:
+                logger.info(
+                    "run.queued runId=%s threadId=%s agentId=%s inputChars=%s",
+                    row["run_id"],
+                    row["thread_id"],
+                    row["agent_id"],
+                    len(request.input),
+                )
             return self._run_response(row)
         if request.stream:
             raise ServiceError("USE_STREAM", "Set stream=true on the HTTP call and read the event stream.", 400)
@@ -95,9 +103,13 @@ class AgentExecutionService:
             if row["status"] == RunStatus.SUCCEEDED.value:
                 yield self._sse("done", self._result_from_row(row, manifest).model_dump(mode="json"))
             else:
-                yield self._sse("error", {"code": "RUN_IN_PROGRESS", "message": f"Run {run_id} is {row['status']}."})
+                yield self._sse(
+                    "error",
+                    {"code": "RUN_IN_PROGRESS", "message": f"Run {row['run_id']} is {row['status']}."},
+                )
             return
         run_id = row["run_id"]
+        self._log_started(row, request, Dispatch.SYNC.value)
         beat = asyncio.create_task(self._heartbeat(run_id, self._api_worker))
         try:
             async with self._slots.acquire():
@@ -135,6 +147,13 @@ class AgentExecutionService:
                 await beat
 
     async def execute_claimed(self, row, worker_id: str) -> None:
+        logger.info(
+            "run.claimed runId=%s threadId=%s workerId=%s attempt=%s",
+            row["run_id"],
+            row["thread_id"],
+            worker_id,
+            row["attempt"],
+        )
         thread = await self._threads.get_open(row["agent_id"], row["thread_id"])
         manifest = await self._threads.manifest_for_run(thread, None)
         beat = asyncio.create_task(self._heartbeat(row["run_id"], worker_id))
@@ -199,6 +218,7 @@ class AgentExecutionService:
             if row["status"] == RunStatus.SUCCEEDED.value:
                 return self._result_from_row(row, manifest)
             raise ServiceError("RUN_IN_PROGRESS", f"Run {row['run_id']} is {row['status']}.", 409)
+        self._log_started(row, request, Dispatch.SYNC.value)
         beat = asyncio.create_task(self._heartbeat(row["run_id"], self._api_worker))
         try:
             async with self._slots.acquire():
@@ -262,6 +282,13 @@ class AgentExecutionService:
                 output_ids.append(artifact_id)
         steps = list(state.get("steps") or [])
         retrieved = list(state.get("retrieved_context") or [])
+        logger.info(
+            "run.succeeded runId=%s threadId=%s stopReason=%s outputChars=%s",
+            run_id,
+            thread["thread_id"],
+            state.get("stop_reason") or "completed",
+            len(output),
+        )
         await self._runs.mark_succeeded(
             run_id,
             output=output,
@@ -280,7 +307,25 @@ class AgentExecutionService:
             row["dispatch"] == Dispatch.ASYNC.value
             and status_after_failure(attempt, int(row["max_attempts"])) == RunStatus.QUEUED
         )
+        logger.warning(
+            "run.failed runId=%s attempt=%s requeue=%s error=%s",
+            row["run_id"],
+            attempt,
+            requeue,
+            type(exc).__name__,
+        )
         await self._runs.mark_failed(row["run_id"], str(exc), requeue=requeue)
+
+    @staticmethod
+    def _log_started(row, request: CreateRunRequest, dispatch: str) -> None:
+        logger.info(
+            "run.started runId=%s threadId=%s agentId=%s dispatch=%s inputChars=%s",
+            row["run_id"],
+            row["thread_id"],
+            row["agent_id"],
+            dispatch,
+            len(request.input),
+        )
 
     async def _heartbeat(self, run_id: UUID, worker_id: str) -> None:
         interval = max(5, self._settings.run_lease_seconds // 3)

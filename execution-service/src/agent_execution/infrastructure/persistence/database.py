@@ -131,6 +131,11 @@ class Database:
                 logger.info("Execution schema is ready")
         return self._pool
 
+    async def ping(self) -> None:
+        pool = await self.pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+
     async def aclose(self) -> None:
         if self._pool is not None:
             await self._pool.close()

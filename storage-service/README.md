@@ -12,7 +12,9 @@ pip install -e ".[dev]"
 storage-service
 ```
 
-The API listens on port 8770.
+The API listens on port 8770. `GET /api/v1/health/live` is the process check. `GET /api/v1/health/ready` checks the database.
+
+Logs include `requestId`. Set `LOG_FORMAT=json` in production. File contents and bearer tokens are not written to the log.
 
 ## Caller API
 

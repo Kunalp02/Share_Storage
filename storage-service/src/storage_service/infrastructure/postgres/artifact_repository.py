@@ -164,6 +164,11 @@ class ArtifactRepository:
                 thread_id,
             )
 
+    async def ping(self) -> None:
+        pool = await self._pool_or_create()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+
     async def aclose(self) -> None:
         if self._pool is not None:
             await self._pool.close()

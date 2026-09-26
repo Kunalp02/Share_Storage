@@ -17,7 +17,11 @@ agent-execution
 agent-execution-worker
 ```
 
-The API listens on port 8765. Run the worker as a second process. It claims queued runs, extends leases, marks interrupted sync runs as failed, and expires old threads.
+The API listens on port 8765. `GET /api/v1/health/live` is the process check. `GET /api/v1/health/ready` checks the database.
+
+Logs include `requestId` on every line. Send `X-Request-ID` to correlate a call, or read the id the service returns. Set `LOG_FORMAT=json` in production. The log line never includes the user message, bearer token, or API key.
+
+Run the worker as a second process. It claims queued runs, extends leases, marks interrupted sync runs as failed, and expires old threads.
 
 ## Studio
 

@@ -6,8 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from agent_execution.core.exceptions import ServiceError
-from agent_execution.logging_config import current_request_id
+from storage_service.core.exceptions import ServiceError
+from storage_service.logging_config import current_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,10 @@ class ApiErrorHandler:
         return JSONResponse(status_code=exc.status_code, content=error_body(exc.code, str(exc), request=request))
 
     async def validation_error(self, request: Request, exc: RequestValidationError) -> JSONResponse:
-        details = [{"loc": list(item.get("loc", ())), "message": item.get("msg"), "type": item.get("type")} for item in exc.errors()]
+        details = [
+            {"loc": list(item.get("loc", ())), "message": item.get("msg"), "type": item.get("type")}
+            for item in exc.errors()
+        ]
         logger.info("request.invalid errors=%s", len(details))
         return JSONResponse(
             status_code=422,

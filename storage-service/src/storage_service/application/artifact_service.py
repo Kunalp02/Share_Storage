@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from uuid import UUID, uuid4
+
+logger = logging.getLogger(__name__)
 
 from storage_service.core.exceptions import ServiceError
 from storage_service.domain.enums import ArtifactStatus, ArtifactType
@@ -37,6 +40,9 @@ class ArtifactService:
         self._s3 = s3
         self._agent_config = agent_config
         self._execution = execution_client
+
+    async def ping(self) -> None:
+        await self._repo.ping()
 
     async def init_upload(
         self,
@@ -119,6 +125,14 @@ class ArtifactService:
         }
         if status == ArtifactStatus.PENDING.value:
             payload["uploadUrl"] = self._s3.presign_put(storage_key, content_type or "application/octet-stream")
+        logger.info(
+            "artifact.stored artifactId=%s threadId=%s runId=%s type=%s status=%s",
+            artifact_id,
+            thread_id,
+            run_id,
+            artifact_type.value,
+            status,
+        )
         return payload
 
     async def store_text(
@@ -158,7 +172,9 @@ class ArtifactService:
             raise ServiceError("INVALID_STATE", "Artifact is not pending upload.", 409)
         await self._agent_config.assert_agent_access(row["agent_id"], bearer_token)
         actual_size = self._s3.head_object(row["storage_key"])
-        await self._repo.mark_ready(artifact_id, size_bytes if size_bytes is not None else actual_size, checksum_sha256)
+        final_size = size_bytes if size_bytes is not None else actual_size
+        await self._repo.mark_ready(artifact_id, final_size, checksum_sha256)
+        logger.info("artifact.ready artifactId=%s sizeBytes=%s", artifact_id, final_size)
         return await self.get_artifact(artifact_id, bearer_token=bearer_token)
 
     async def get_artifact(self, artifact_id: UUID, *, bearer_token: str) -> dict:
@@ -218,6 +234,7 @@ class ArtifactService:
         for row in rows:
             self._s3.delete_object(row["storage_key"])
         await self._repo.mark_deleted_for_thread(thread_id)
+        logger.info("artifact.deleted threadId=%s count=%s", thread_id, len(rows))
         return len(rows)
 
     async def _require(self, artifact_id: UUID):

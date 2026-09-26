@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
+from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_bearer_token, get_thread_service
 from agent_execution.infrastructure.identity import caller_label
 from agent_execution.schemas.threads import (
@@ -17,8 +18,8 @@ from agent_execution.schemas.threads import (
 from agent_execution.services.thread_service import ThreadService
 
 
-class ThreadController:
-    def __init__(self, router: APIRouter) -> None:
+class ThreadController(ApiController):
+    def register(self, router: APIRouter) -> None:
         router.post("/agents/{agent_id}/threads", response_model=ThreadResponse, tags=["threads"])(self.create)
         router.post("/agents/{agent_id}/threads/resolve", response_model=ThreadResponse, tags=["threads"])(self.resolve)
         router.get("/agents/{agent_id}/threads/{thread_id}", response_model=ThreadResponse, tags=["threads"])(self.get)

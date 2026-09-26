@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_api_key, get_app_container, get_execution_service
 from agent_execution.core.container import ApplicationContainer
 from agent_execution.core.exceptions import ServiceError
@@ -14,8 +15,8 @@ from agent_execution.schemas.threads import Channel, CreateThreadRequest, Execut
 from agent_execution.services.agent_execution_service import AgentExecutionService
 
 
-class InvokeController:
-    def __init__(self, router: APIRouter) -> None:
+class InvokeController(ApiController):
+    def register(self, router: APIRouter) -> None:
         router.post("/invoke/{slug}/threads", response_model=ThreadResponse, tags=["invoke"])(self.open_thread)
         router.post("/invoke/{slug}/threads/{thread_id}/messages", tags=["invoke"])(self.message)
         router.post("/invoke/{slug}", tags=["invoke"])(self.invoke_once)

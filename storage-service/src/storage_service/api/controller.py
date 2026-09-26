@@ -1,0 +1,11 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+
+class ApiController:
+    def __init__(self, router: APIRouter) -> None:
+        self.register(router)
+
+    def register(self, router: APIRouter) -> None:
+        raise NotImplementedError

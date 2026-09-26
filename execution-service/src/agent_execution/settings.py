@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8765
     log_level: str = "info"
+    log_format: str = "text"
     cors_origins: str = "http://localhost:3000"
 
     agent_config_base_url: str = ""

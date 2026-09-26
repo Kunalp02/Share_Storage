@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -18,6 +19,8 @@ from agent_execution.schemas.threads import (
 from agent_execution.services.manifest_service import ManifestService
 from agent_execution.services.run_policy import pins_manifest
 from agent_execution.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class ThreadService:
@@ -63,6 +66,14 @@ class ThreadService:
             retention_policy=policy.value,
             triggered_by=triggered_by,
             expires_at=expires_at,
+        )
+        logger.info(
+            "thread.created threadId=%s agentId=%s channel=%s executionType=%s revisionId=%s",
+            thread_id,
+            agent_id,
+            channel.value,
+            request.execution_type.value,
+            manifest.revision_id or chosen_revision,
         )
         return self._to_response(
             thread_id=thread_id,
