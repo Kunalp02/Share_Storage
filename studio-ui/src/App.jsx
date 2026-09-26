@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { clearSession, loadSession, login, logout, me, pick, saveSession } from "./api";
+import { Activity } from "./Activity";
 import { Studio } from "./Studio";
+
+function groupLabels(groups) {
+  if (!groups) return [];
+  if (Array.isArray(groups)) return groups.map(String);
+  if (typeof groups === "object") return Object.entries(groups).map(([id, name]) => name || id);
+  return [String(groups)];
+}
 
 function sessionFromLogin(username, payload) {
   const token = pick(payload, "accessToken", "AccessToken");
@@ -24,6 +32,7 @@ export function App() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState("activity");
 
   useEffect(() => {
     if (!session?.token) return undefined;
@@ -101,5 +110,32 @@ export function App() {
     );
   }
 
-  return <Studio session={session} onLogout={onLogout} />;
+  const identity = session.identity || {};
+  const permissionCodes = Array.isArray(identity.permissions)
+    ? identity.permissions.map(String)
+    : String(session.permissions || "").split(",").map((item) => item.trim()).filter(Boolean);
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Agent studio</p>
+          <strong>{session.displayName || session.username}</strong>
+          <span className="muted"> {session.username}</span>
+        </div>
+        <nav className="page-nav">
+          <button type="button" className={page === "activity" ? "selected" : "ghost"} onClick={() => setPage("activity")}>Activity</button>
+          <button type="button" className={page === "test" ? "selected" : "ghost"} onClick={() => setPage("test")}>Test agent</button>
+        </nav>
+        <div className="session-facts">
+          <span>{session.status || "Signed in"}</span>
+          <span>{session.roleProfile || "No role profile"}</span>
+          <span>{groupLabels(identity.groups || session.groups).join(", ") || "No groups"}</span>
+          <span>Permissions {permissionCodes.join(", ") || "—"}</span>
+        </div>
+        <button type="button" className="ghost" onClick={onLogout}>Sign out</button>
+      </header>
+      {page === "activity" ? <Activity session={session} /> : <Studio session={session} />}
+    </div>
+  );
 }

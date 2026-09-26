@@ -106,6 +106,10 @@ export async function listAgents(token) {
   return asList(payload);
 }
 
+export function listDeployments(token, agentId) {
+  return request(`/platform/execution/api/v1/agents/${agentId}/deployments`, { token });
+}
+
 export function listThreads(token, agentId) {
   return request(`/platform/execution/api/v1/agents/${agentId}/threads`, { token });
 }

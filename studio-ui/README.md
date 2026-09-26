@@ -4,6 +4,7 @@ Browser for signing in and trying an agent. The page never talks to Keycloak. It
 
 ## What you can do
 
+- **Activity** shows running, queued, and recently failed runs across the agents this user can open, plus who started each one.
 - Sign in and see the user, groups, and permission codes returned by auth.
 - List agents from Agent Config (`GET /api/v1/agents`). If that list is unavailable, paste an agent id.
 - Open a test or production thread.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   agentIdOf,
   agentNameOf,
@@ -23,20 +23,13 @@ function shortId(value) {
   return text.length > 8 ? text.slice(0, 8) : text;
 }
 
-function groupLabels(groups) {
-  if (!groups) return [];
-  if (Array.isArray(groups)) return groups.map(String);
-  if (typeof groups === "object") return Object.entries(groups).map(([id, name]) => name || id);
-  return [String(groups)];
-}
-
 function stepLabel(step) {
   if (!step) return "";
   if (typeof step === "string") return step;
   return step.name || step.detail || JSON.stringify(step);
 }
 
-export function Studio({ session, onLogout }) {
+export function Studio({ session }) {
   const [agents, setAgents] = useState([]);
   const [agentError, setAgentError] = useState("");
   const [manualAgentId, setManualAgentId] = useState("");
@@ -55,15 +48,6 @@ export function Studio({ session, onLogout }) {
 
   const token = session.token;
   const selectedRun = runs.find((run) => String(pick(run, "runId", "RunId")) === selectedRunId) || null;
-  const identity = session.identity || {};
-  const permissionCodes = useMemo(() => {
-    const fromMe = identity.permissions || identity.Permissions;
-    if (Array.isArray(fromMe)) return fromMe.map(String);
-    return String(session.permissions || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }, [identity, session.permissions]);
 
   async function refreshAgents() {
     setAgentError("");
@@ -198,23 +182,7 @@ export function Studio({ session, onLogout }) {
   }
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Agent studio</p>
-          <strong>{session.displayName || session.username}</strong>
-          <span className="muted"> {session.username}</span>
-        </div>
-        <div className="session-facts">
-          <span>{session.status || "Signed in"}</span>
-          <span>{session.roleProfile || "No role profile"}</span>
-          <span>{groupLabels(identity.groups || session.groups).join(", ") || "No groups"}</span>
-          <span>Permissions {permissionCodes.join(", ") || "—"}</span>
-        </div>
-        <button type="button" className="ghost" onClick={onLogout}>Sign out</button>
-      </header>
-
-      <div className="workspace">
+    <div className="workspace">
         <aside className="panel">
           <div className="panel-head">
             <h2>Agents</h2>
@@ -319,7 +287,6 @@ export function Studio({ session, onLogout }) {
             </dl>
           ) : null}
         </aside>
-      </div>
     </div>
   );
 }

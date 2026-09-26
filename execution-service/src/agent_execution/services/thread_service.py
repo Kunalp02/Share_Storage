@@ -85,6 +85,7 @@ class ThreadService:
             manifest_hash=manifest.manifest_hash,
             deployment_id=deployment_id,
             retention_policy=policy,
+            triggered_by=triggered_by,
             expires_at=expires_at,
             created_at=datetime.now(timezone.utc),
         )
@@ -179,6 +180,7 @@ class ThreadService:
             manifest_hash=row["manifest_hash"],
             deployment_id=row["deployment_id"],
             retention_policy=RetentionPolicy(row["retention_policy"]),
+            triggered_by=row["triggered_by"] or "",
             expires_at=row["expires_at"],
             created_at=row["created_at"],
         )

@@ -62,6 +62,7 @@ class ThreadResponse(BaseModel):
     manifest_hash: str = Field(alias="manifestHash")
     deployment_id: UUID | None = Field(default=None, alias="deploymentId")
     retention_policy: RetentionPolicy = Field(alias="retentionPolicy")
+    triggered_by: str = Field(default="", alias="triggeredBy")
     session_id: str = Field(alias="sessionId")
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
     created_at: datetime = Field(alias="createdAt")
