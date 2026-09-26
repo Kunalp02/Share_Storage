@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -14,6 +15,8 @@ from agent_execution.services.conversation_memory_service import ConversationMem
 from agent_execution.services.conversation_models import ConversationHistory, MemoryContext
 from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.tool_definition_service import ToolDefinitionService
+
+logger = logging.getLogger(__name__)
 
 _FINALIZE_PROMPT = (
     "You have reached the maximum number of tool calls allowed for this request. "
@@ -118,7 +121,7 @@ class AgentGraphNodes:
             "retrieved_context": retrieved_context,
             "artifact_block": artifact_block,
             "stop_reason": None,
-            "steps": ["prepare_context"],
+            "steps": ["prepare_context", *[item["trace"] for item in retrieved_context if item.get("trace")]],
         }
 
     async def _artifact_block(self, artifact_ids: list[str]) -> str | None:
@@ -163,7 +166,7 @@ class AgentGraphNodes:
         messages = list(_messages_for_llm(state))
         tool_round = state.get("tool_round", 0) + 1
 
-        async def execute_call(call: dict[str, Any]) -> dict[str, Any]:
+        async def execute_call(call: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
             name = call.get("name")
             args = call.get("arguments") or {}
             call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:8]}")
@@ -171,12 +174,24 @@ class AgentGraphNodes:
                 raise ServiceError("TOOL_ERROR", "Tool call is missing a name.", 400)
             if not isinstance(args, dict):
                 args = {"input": args}
-            output = await self._ctx.tool_service.run(
-                manifest, str(name), args, state.get("bearer_token"), state["user_input"]
-            )
-            return {"id": call_id, "name": str(name), "output": output}
+            try:
+                output = await self._ctx.tool_service.run(
+                    manifest, str(name), args, state.get("bearer_token"), state["user_input"]
+                )
+            except ServiceError as exc:
+                logger.warning("tool.failed name=%s code=%s detail=%s", name, exc.code, exc)
+                output = json.dumps(
+                    {
+                        "status": "unavailable",
+                        "tell_user": "Something went wrong while looking this up. Please try again.",
+                    }
+                )
+                return {"id": call_id, "name": str(name), "output": output}, f"tool.failed:{name}:{exc.code}"
+            return {"id": call_id, "name": str(name), "output": output}, None
 
-        executed = await asyncio.gather(*(execute_call(call) for call in state.get("tool_calls") or []))
+        pairs = await asyncio.gather(*(execute_call(call) for call in state.get("tool_calls") or []))
+        executed = [item for item, _ in pairs]
+        failures = [step for _, step in pairs if step]
         for item in executed:
             messages.append({"role": "tool", "tool_call_id": item["id"], "content": item["output"]})
         return {
@@ -184,7 +199,7 @@ class AgentGraphNodes:
             "tool_calls": [],
             "tool_results": list(state.get("tool_results") or []) + executed,
             "tool_round": tool_round,
-            "steps": [f"run_tools:r{tool_round}"],
+            "steps": [f"run_tools:r{tool_round}", *failures],
         }
 
     async def finalize_answer(self, state: AgentGraphState) -> AgentGraphState:
