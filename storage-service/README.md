@@ -8,7 +8,7 @@ A thread id is the same value execution returns as `threadId` and `executionId`.
 
 ```bash
 cp .env.example .env
-pip install -e ".[dev]"
+pip install -e "../platform-auth" -e ".[dev]"
 storage-service
 ```
 
@@ -18,7 +18,7 @@ Logs include `requestId`. Set `LOG_FORMAT=json` in production. File contents and
 
 ## Caller API
 
-`POST /api/v1/agents/{agentId}/artifacts/init` with a user bearer token. If `threadId` is omitted, storage asks execution to open a thread.
+`POST /api/v1/agents/{agentId}/artifacts/init` with the same platform bearer token the .NET APIs accept. Storage confirms that token with the auth service, then forwards it to Agent Config. If `threadId` is omitted, storage asks execution to open a thread.
 
 `POST /api/v1/artifacts/{artifactId}/complete` after the client uploads to the presigned URL.
 

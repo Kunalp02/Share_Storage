@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     auth_service_username: str = ""
     auth_service_password: str = ""
     auth_token_refresh_margin_seconds: int = 60
+    auth_me_path: str = "/api/v1/auth/me"
+    auth_principal_cache_seconds: int = 0
+    auth_required_permissions: str = ""
 
     bifrost_gateway_base_url: str = ""
     bifrost_gateway_api_key: str = ""

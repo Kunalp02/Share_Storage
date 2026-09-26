@@ -12,7 +12,7 @@ Runtime for studio test chats and the published agent API. Agent definitions sta
 
 ```bash
 cp .env.example .env
-pip install -e ".[dev]"
+pip install -e "../platform-auth" -e ".[dev]"
 agent-execution
 agent-execution-worker
 ```
@@ -29,7 +29,9 @@ Run the worker as a second process. It claims queued runs, extends leases, marks
 
 `POST /api/v1/agents/{agentId}/threads/{threadId}/runs` with `{ "input": "...", "inputArtifactIds": [], "stream": false, "background": false }`.
 
-A bearer token is required. Agent Config still decides whether that user can see the agent.
+Send the same `Authorization: Bearer` token the .NET configuration APIs accept. Execution asks `GET /api/v1/auth/me` on the auth service before it does any work. A rejected or logged-out token stops here. The same token is then forwarded to Agent Config, which still decides whether that user can see the agent.
+
+Set `AUTH_REQUIRED_PERMISSIONS` to comma-separated permission codes when a studio route must match a .NET role gate. Leave it empty to allow every accepted platform user. `AUTH_PRINCIPAL_CACHE_SECONDS=0` checks the auth service on every call, so logout is visible immediately.
 
 ## Published API
 

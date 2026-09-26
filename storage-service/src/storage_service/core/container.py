@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from platform_auth import PlatformTokenVerifier, parse_codes
+
 from storage_service.application.artifact_service import ArtifactService
 from storage_service.infrastructure.clients.platform_clients import AgentConfigClient, ExecutionClient
 from storage_service.infrastructure.postgres.artifact_repository import ArtifactRepository
@@ -14,6 +16,7 @@ class ApplicationContainer:
     settings: Settings
     repo: ArtifactRepository = field(init=False)
     s3: S3ObjectStore = field(init=False)
+    platform_auth: PlatformTokenVerifier = field(init=False)
     artifact_service: ArtifactService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -24,6 +27,14 @@ class ApplicationContainer:
                 self.s3.ensure_bucket()
             except Exception:
                 pass
+        self.platform_auth = PlatformTokenVerifier(
+            configured=bool(self.settings.auth_service_base_url.strip()),
+            base_url=self.settings.auth_service_base_url,
+            verify_ssl=self.settings.verify_ssl,
+            me_path=self.settings.auth_me_path,
+            cache_ttl_seconds=self.settings.auth_principal_cache_seconds,
+            required_permissions=parse_codes(self.settings.auth_required_permissions),
+        )
         self.artifact_service = ArtifactService(
             self.settings,
             self.repo,
@@ -33,6 +44,7 @@ class ApplicationContainer:
         )
 
     async def shutdown(self) -> None:
+        await self.platform_auth.aclose()
         await self.repo.aclose()
 
 

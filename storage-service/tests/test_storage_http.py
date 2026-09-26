@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import FastAPI
@@ -25,6 +26,37 @@ def _app() -> FastAPI:
         raise ServiceError("FORBIDDEN", "Invalid internal API key.", 403)
 
     return app
+
+
+def test_artifact_init_requires_platform_token(monkeypatch):
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://postgres:password@127.0.0.1:5432/storage")
+    monkeypatch.setenv("AUTH_SERVICE_BASE_URL", "")
+    from storage_service.api.router import create_api_router
+    from storage_service.core import container as container_module
+    from storage_service.settings import get_settings
+
+    get_settings.cache_clear()
+    container_module._container = None
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(create_api_router())
+    client = TestClient(app)
+    body = {"artifactType": "INPUT", "filename": "note.txt"}
+    missing = client.post(
+        "/api/v1/agents/00000000-0000-0000-0000-000000000001/artifacts/init",
+        json=body,
+    )
+    rejected = client.post(
+        "/api/v1/agents/00000000-0000-0000-0000-000000000001/artifacts/init",
+        json=body,
+        headers={"Authorization": "Bearer not-a-platform-token"},
+    )
+    assert missing.status_code == 401
+    assert missing.json()["code"] == "UNAUTHORIZED"
+    assert rejected.status_code == 503
+    assert rejected.json()["code"] == "AUTH_NOT_CONFIGURED"
+    asyncio.run(container_module.shutdown_container())
+    get_settings.cache_clear()
 
 
 def test_request_id_header_is_preserved():

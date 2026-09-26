@@ -27,6 +27,10 @@ class Settings(BaseSettings):
 
     agent_config_base_url: str = ""
     execution_service_base_url: str = ""
+    auth_service_base_url: str = ""
+    auth_me_path: str = "/api/v1/auth/me"
+    auth_principal_cache_seconds: int = 0
+    auth_required_permissions: str = ""
     internal_api_key: str = ""
     verify_ssl: bool = True
     artifact_text_max_chars: int = 12000

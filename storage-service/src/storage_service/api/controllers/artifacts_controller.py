@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from storage_service.api.controller import ApiController
-from storage_service.api.dependencies import bearer_token, get_artifact_service
+from storage_service.api.dependencies import get_artifact_service, get_bearer_token
 from storage_service.api.schemas import CompleteArtifactRequest, InitArtifactRequest
 from storage_service.application.artifact_service import ArtifactService
 from storage_service.core.exceptions import ServiceError
@@ -27,8 +27,8 @@ class ArtifactsController(ApiController):
         self,
         agent_id: UUID,
         body: InitArtifactRequest,
-        request: Request,
         service: Annotated[ArtifactService, Depends(get_artifact_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
     ) -> dict:
         if body.agent_id and body.agent_id != agent_id:
             raise ServiceError("VALIDATION_FAILED", "agentId in body must match path.", 400)
@@ -37,7 +37,7 @@ class ArtifactsController(ApiController):
             artifact_type=body.artifact_type,
             filename=body.filename,
             content_type=body.content_type,
-            bearer_token=bearer_token(request),
+            bearer_token=token,
             thread_id=body.resolved_thread_id(),
             run_id=body.run_id,
             mode=body.mode.value,
@@ -47,8 +47,8 @@ class ArtifactsController(ApiController):
         self,
         thread_id: UUID,
         body: InitArtifactRequest,
-        request: Request,
         service: Annotated[ArtifactService, Depends(get_artifact_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
     ) -> dict:
         if not body.agent_id:
             raise ServiceError("VALIDATION_FAILED", "agentId is required.", 400)
@@ -57,7 +57,7 @@ class ArtifactsController(ApiController):
             artifact_type=body.artifact_type,
             filename=body.filename,
             content_type=body.content_type,
-            bearer_token=bearer_token(request),
+            bearer_token=token,
             thread_id=thread_id,
             run_id=body.run_id,
             mode=body.mode.value,
@@ -67,35 +67,35 @@ class ArtifactsController(ApiController):
         self,
         artifact_id: UUID,
         body: CompleteArtifactRequest,
-        request: Request,
         service: Annotated[ArtifactService, Depends(get_artifact_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
     ) -> dict:
         return await service.complete_upload(
             artifact_id,
             size_bytes=body.size_bytes,
             checksum_sha256=body.checksum_sha256,
-            bearer_token=bearer_token(request),
+            bearer_token=token,
         )
 
     async def get_one(
         self,
         artifact_id: UUID,
-        request: Request,
         service: Annotated[ArtifactService, Depends(get_artifact_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
     ) -> dict:
-        return await service.get_artifact(artifact_id, bearer_token=bearer_token(request))
+        return await service.get_artifact(artifact_id, bearer_token=token)
 
     async def list_for_thread(
         self,
         thread_id: UUID,
-        request: Request,
         service: Annotated[ArtifactService, Depends(get_artifact_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
         artifact_type: ArtifactType | None = None,
         agent_id: UUID | None = None,
     ) -> list[dict]:
         return await service.list_artifacts(
             thread_id,
             artifact_type=artifact_type,
-            bearer_token=bearer_token(request),
+            bearer_token=token,
             agent_id=agent_id,
         )
