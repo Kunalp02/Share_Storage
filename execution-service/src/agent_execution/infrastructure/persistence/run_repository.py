@@ -38,6 +38,8 @@ class RunRepository:
         input_artifact_ids: list[str],
         org_id: str | None,
         started_at: datetime | None,
+        started_by: str = "",
+        client_ip: str = "",
     ):
         pool = await self._database.pool()
         async with pool.acquire() as conn:
@@ -58,9 +60,9 @@ class RunRepository:
                     run_id, thread_id, agent_id, status, dispatch, input,
                     revision_id, manifest_hash, attempt, max_attempts, worker_id,
                     lease_expires_at, idempotency_key, input_artifact_ids, org_id,
-                    created_at, started_at
+                    started_by, client_ip, created_at, started_at
                 ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19
                 )
                 """,
                 run_id,
@@ -78,6 +80,8 @@ class RunRepository:
                 idempotency_key,
                 json.dumps(input_artifact_ids),
                 org_id,
+                started_by,
+                client_ip,
                 datetime.now(timezone.utc),
                 started_at,
             )

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from agent_execution.api.request_context import client_address
 from agent_execution.agents.graph.builder import build_execution_graph
 from agent_execution.agents.graph.context import AgentGraphContext
 from agent_execution.agents.graph.routing import route_after_llm
@@ -156,3 +157,13 @@ async def test_production_thread_rejects_unpublished_agent():
             triggered_by="builder",
         )
     assert exc.value.code == "AGENT_NOT_PUBLISHED"
+
+
+def test_client_address_uses_the_first_forwarded_hop():
+    request = SimpleNamespace(
+        headers={"x-forwarded-for": "10.4.4.4, 172.16.0.1", "x-real-ip": "172.16.0.1"},
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+    assert client_address(request) == "10.4.4.4"
+    direct = SimpleNamespace(headers={}, client=SimpleNamespace(host="192.168.1.20"))
+    assert client_address(direct) == "192.168.1.20"

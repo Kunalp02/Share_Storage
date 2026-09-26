@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_api_key, get_app_container, get_execution_service
+from agent_execution.api.request_context import client_address
 from agent_execution.core.container import ApplicationContainer
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.schemas.runs import CreateRunRequest, InvokeRequest, RunResponse, RunResult
@@ -53,7 +54,9 @@ class InvokeController(ApiController):
         deployment = await container.deployment_service.authenticate(slug, api_key)
         await self._owned_thread(container, deployment, thread_id)
         run_request = _to_run_request(body)
-        return await _dispatch(service, deployment["agent_id"], thread_id, run_request, request)
+        return await _dispatch(
+            service, deployment["agent_id"], thread_id, run_request, request, started_by=f"api:{slug}"
+        )
 
     async def invoke_once(
         self,
@@ -71,7 +74,9 @@ class InvokeController(ApiController):
         else:
             thread = await self.open_thread(slug, container, api_key)
             thread_id = thread.thread_id
-        return await _dispatch(service, deployment["agent_id"], thread_id, _to_run_request(body), request)
+        return await _dispatch(
+            service, deployment["agent_id"], thread_id, _to_run_request(body), request, started_by=f"api:{slug}"
+        )
 
     async def get_run(
         self,
@@ -109,15 +114,24 @@ def _to_run_request(body: InvokeRequest) -> CreateRunRequest:
     )
 
 
-async def _dispatch(service: AgentExecutionService, agent_id: UUID, thread_id: UUID, body: CreateRunRequest, request: Request):
+async def _dispatch(
+    service: AgentExecutionService,
+    agent_id: UUID,
+    thread_id: UUID,
+    body: CreateRunRequest,
+    request: Request,
+    *,
+    started_by: str,
+):
     wants_stream = body.stream or "text/event-stream" in request.headers.get("accept", "")
+    address = client_address(request)
     if wants_stream and not body.background:
         return StreamingResponse(
-            service.stream(agent_id, thread_id, body, None),
+            service.stream(agent_id, thread_id, body, None, started_by=started_by, client_ip=address),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    result = await service.start(agent_id, thread_id, body, None)
+    result = await service.start(agent_id, thread_id, body, None, started_by=started_by, client_ip=address)
     if isinstance(result, (RunResult, RunResponse)):
         return result
     return result

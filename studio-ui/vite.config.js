@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
   const proxy = (prefix, target) => ({
     target,
     changeOrigin: true,
+    xfwd: true,
     rewrite: (path) => path.replace(new RegExp(`^${prefix}`), ""),
     configure: (server) => {
       server.on("error", (error, _req, res) => {

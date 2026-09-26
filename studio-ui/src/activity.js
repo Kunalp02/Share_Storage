@@ -10,8 +10,8 @@ export function sourceOf(thread) {
   return "Studio test";
 }
 
-export function startedBy(thread, source, slug) {
-  const who = pick(thread, "triggeredBy", "TriggeredBy");
+export function startedBy(run, thread, source, slug) {
+  const who = pick(run, "startedBy", "StartedBy") || pick(thread, "triggeredBy", "TriggeredBy");
   if (who) return String(who);
   if (source === "Published API") return slug ? `api:${slug}` : "Published API";
   return "Studio";
@@ -84,7 +84,8 @@ export function buildActivity({ agents, threadsByAgent, runsByThread, deployment
           completedAt: pick(run, "completedAt", "CompletedAt"),
           source,
           slug,
-          startedBy: startedBy(thread, source, slug),
+          startedBy: startedBy(run, thread, source, slug),
+          clientIp: String(pick(run, "clientIp", "ClientIp") || ""),
           threadStatus: String(pick(thread, "status", "Status") || ""),
         });
       }

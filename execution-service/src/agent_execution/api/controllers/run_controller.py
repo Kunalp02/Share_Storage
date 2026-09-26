@@ -6,8 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
+from platform_auth import PlatformPrincipal
+
 from agent_execution.api.controller import ApiController
-from agent_execution.api.dependencies import get_bearer_token, get_execution_service
+from agent_execution.api.dependencies import get_bearer_token, get_execution_service, get_platform_principal
+from agent_execution.api.request_context import client_address
 from agent_execution.schemas.runs import CreateRunRequest, RunResponse, RunResult
 from agent_execution.services.agent_execution_service import AgentExecutionService
 
@@ -33,16 +36,32 @@ class RunController(ApiController):
         body: CreateRunRequest,
         request: Request,
         service: Annotated[AgentExecutionService, Depends(get_execution_service)],
-        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
     ):
         wants_stream = body.stream or "text/event-stream" in request.headers.get("accept", "")
+        started_by = principal.username or principal.subject
+        address = client_address(request)
         if wants_stream and not body.background:
             return StreamingResponse(
-                service.stream(agent_id, thread_id, body, token),
+                service.stream(
+                    agent_id,
+                    thread_id,
+                    body,
+                    principal.token,
+                    started_by=started_by,
+                    client_ip=address,
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
-        result = await service.start(agent_id, thread_id, body, token)
+        result = await service.start(
+            agent_id,
+            thread_id,
+            body,
+            principal.token,
+            started_by=started_by,
+            client_ip=address,
+        )
         if isinstance(result, RunResult):
             return result
         return result

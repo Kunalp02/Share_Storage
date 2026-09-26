@@ -61,6 +61,8 @@ class RunResponse(BaseModel):
     output_artifact_ids: list[UUID] = Field(default_factory=list, alias="outputArtifactIds")
     steps: list[str] = Field(default_factory=list)
     stop_reason: str | None = Field(default=None, alias="stopReason")
+    started_by: str = Field(default="", alias="startedBy")
+    client_ip: str = Field(default="", alias="clientIp")
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(default=None, alias="startedAt")
     completed_at: datetime | None = Field(default=None, alias="completedAt")

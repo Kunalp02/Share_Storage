@@ -55,10 +55,18 @@ SCHEMA = [
         retrieved_context JSONB NOT NULL DEFAULT '[]'::jsonb,
         stop_reason TEXT NULL,
         org_id TEXT NULL,
+        started_by TEXT NOT NULL DEFAULT '',
+        client_ip TEXT NOT NULL DEFAULT '',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         started_at TIMESTAMPTZ NULL,
         completed_at TIMESTAMPTZ NULL
     )
+    """,
+    """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT ''
+    """,
+    """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS client_ip TEXT NOT NULL DEFAULT ''
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_runs_thread_created

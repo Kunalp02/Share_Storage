@@ -61,12 +61,23 @@ class AgentExecutionService:
         thread_id: UUID,
         request: CreateRunRequest,
         bearer_token: str | None,
+        *,
+        started_by: str = "",
+        client_ip: str = "",
     ) -> RunResult | RunResponse:
         thread = await self._threads.get_open(agent_id, thread_id)
         manifest = await self._threads.manifest_for_run(thread, bearer_token)
         if request.background:
             row, created = await self._insert(
-                thread, request, manifest, Dispatch.ASYNC, bearer_token=None, worker_id=None, attempt=0
+                thread,
+                request,
+                manifest,
+                Dispatch.ASYNC,
+                bearer_token=None,
+                worker_id=None,
+                attempt=0,
+                started_by=started_by,
+                client_ip=client_ip,
             )
             if created:
                 logger.info(
@@ -79,7 +90,9 @@ class AgentExecutionService:
             return self._run_response(row)
         if request.stream:
             raise ServiceError("USE_STREAM", "Set stream=true on the HTTP call and read the event stream.", 400)
-        return await self._execute_sync(thread, request, manifest, bearer_token)
+        return await self._execute_sync(
+            thread, request, manifest, bearer_token, started_by=started_by, client_ip=client_ip
+        )
 
     async def stream(
         self,
@@ -87,6 +100,9 @@ class AgentExecutionService:
         thread_id: UUID,
         request: CreateRunRequest,
         bearer_token: str | None,
+        *,
+        started_by: str = "",
+        client_ip: str = "",
     ) -> AsyncIterator[str]:
         thread = await self._threads.get_open(agent_id, thread_id)
         manifest = await self._threads.manifest_for_run(thread, bearer_token)
@@ -98,6 +114,8 @@ class AgentExecutionService:
             bearer_token,
             worker_id=self._api_worker,
             attempt=1,
+            started_by=started_by,
+            client_ip=client_ip,
         )
         if not created:
             if row["status"] == RunStatus.SUCCEEDED.value:
@@ -204,7 +222,9 @@ class AgentExecutionService:
         rows = await self._runs.list_for_thread(thread_id, limit, offset)
         return [self._run_response(row) for row in rows]
 
-    async def _execute_sync(self, thread, request, manifest, bearer_token) -> RunResult:
+    async def _execute_sync(
+        self, thread, request, manifest, bearer_token, *, started_by: str = "", client_ip: str = ""
+    ) -> RunResult:
         row, created = await self._insert(
             thread,
             request,
@@ -213,6 +233,8 @@ class AgentExecutionService:
             bearer_token,
             worker_id=self._api_worker,
             attempt=1,
+            started_by=started_by,
+            client_ip=client_ip,
         )
         if not created:
             if row["status"] == RunStatus.SUCCEEDED.value:
@@ -234,7 +256,19 @@ class AgentExecutionService:
             with contextlib.suppress(asyncio.CancelledError):
                 await beat
 
-    async def _insert(self, thread, request, manifest, dispatch: Dispatch, bearer_token, worker_id, attempt: int):
+    async def _insert(
+        self,
+        thread,
+        request,
+        manifest,
+        dispatch: Dispatch,
+        bearer_token,
+        worker_id,
+        attempt: int,
+        *,
+        started_by: str = "",
+        client_ip: str = "",
+    ):
         del bearer_token
         lease = None
         started = None
@@ -259,6 +293,8 @@ class AgentExecutionService:
                 input_artifact_ids=[str(item) for item in request.input_artifact_ids],
                 org_id=request.org_id,
                 started_at=started,
+                started_by=started_by,
+                client_ip=client_ip,
             )
         except Exception as exc:
             if "ux_runs_idempotency" in str(exc) or "duplicate key" in str(exc).lower():
@@ -319,12 +355,14 @@ class AgentExecutionService:
     @staticmethod
     def _log_started(row, request: CreateRunRequest, dispatch: str) -> None:
         logger.info(
-            "run.started runId=%s threadId=%s agentId=%s dispatch=%s inputChars=%s",
+            "run.started runId=%s threadId=%s agentId=%s dispatch=%s inputChars=%s startedBy=%s clientIp=%s",
             row["run_id"],
             row["thread_id"],
             row["agent_id"],
             dispatch,
             len(request.input),
+            row["started_by"] or "",
+            row["client_ip"] or "",
         )
 
     async def _heartbeat(self, run_id: UUID, worker_id: str) -> None:
@@ -418,6 +456,8 @@ class AgentExecutionService:
             output_artifact_ids=_uuid_list(row["output_artifact_ids"]),
             steps=_str_list(row["steps"]),
             stop_reason=row["stop_reason"],
+            started_by=row["started_by"] or "",
+            client_ip=row["client_ip"] or "",
             created_at=row["created_at"],
             started_at=row["started_at"],
             completed_at=row["completed_at"],

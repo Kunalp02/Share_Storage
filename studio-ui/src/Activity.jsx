@@ -131,6 +131,7 @@ export function Activity({ session }) {
                   <th>When</th>
                   <th>Agent</th>
                   <th>Source</th>
+                  <th>Who</th>
                   <th>Conversation</th>
                   <th>Status</th>
                   <th>Request</th>
@@ -145,6 +146,7 @@ export function Activity({ session }) {
                     <td>{formatWhen(row.createdAt)}</td>
                     <td>{row.agentName}</td>
                     <td>{row.source}</td>
+                    <td>{row.startedBy}{row.clientIp ? ` · ${row.clientIp}` : ""}</td>
                     <td>{row.threadId.slice(0, 8)}</td>
                     <td><span className={`status status-${row.status.toLowerCase()}`}>{row.status}</span>{row.attempt > 1 ? ` · try ${row.attempt}` : ""}</td>
                     <td>{firstLine(row.input) || "—"}</td>
@@ -165,6 +167,7 @@ export function Activity({ session }) {
               <div><dt>Agent</dt><dd>{selected.agentName}</dd></div>
               <div><dt>Source</dt><dd>{selected.source}{selected.slug ? ` · ${selected.slug}` : ""}</dd></div>
               <div><dt>Started by</dt><dd>{selected.startedBy}</dd></div>
+              <div><dt>Client IP</dt><dd>{selected.clientIp || "—"}</dd></div>
               <div><dt>Conversation</dt><dd>{selected.threadId}</dd></div>
               <div><dt>Status</dt><dd>{selected.status}{selected.attempt > 1 ? ` · attempt ${selected.attempt}` : ""}</dd></div>
               <div><dt>Dispatch</dt><dd>{selected.dispatch || "—"}</dd></div>

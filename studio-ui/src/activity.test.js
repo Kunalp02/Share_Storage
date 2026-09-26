@@ -25,7 +25,15 @@ test("activity summary counts live runs, recent failures, and active agents", ()
     },
     runsByThread: {
       "agent-1:thread-1": [
-        { runId: "run-live", status: "RUNNING", input: "What is open?", createdAt: "2026-09-26T11:50:00Z", attempt: 1 },
+        {
+          runId: "run-live",
+          status: "RUNNING",
+          input: "What is open?",
+          createdAt: "2026-09-26T11:50:00Z",
+          attempt: 1,
+          startedBy: "ada",
+          clientIp: "10.4.4.4",
+        },
       ],
       "agent-1:thread-2": [
         {
@@ -61,6 +69,7 @@ test("activity summary counts live runs, recent failures, and active agents", ()
   assert.equal(activity.rows[0].runId, "run-live");
   assert.equal(activity.rows[0].source, "Studio test");
   assert.equal(activity.rows[0].startedBy, "ada");
+  assert.equal(activity.rows[0].clientIp, "10.4.4.4");
   assert.equal(activity.rows[0].agentName, "Claims");
   const failed = activity.rows.find((row) => row.runId === "run-fail");
   assert.equal(failed.source, "Published API");

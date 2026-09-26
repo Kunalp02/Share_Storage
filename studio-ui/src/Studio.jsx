@@ -275,6 +275,8 @@ export function Studio({ session }) {
           {selectedRun ? (
             <dl className="facts">
               <div><dt>Run</dt><dd>{pick(selectedRun, "runId")}</dd></div>
+              <div><dt>Started by</dt><dd>{pick(selectedRun, "startedBy") || "—"}</dd></div>
+              <div><dt>Client IP</dt><dd>{pick(selectedRun, "clientIp") || "—"}</dd></div>
               <div><dt>Status</dt><dd>{pick(selectedRun, "status")}</dd></div>
               <div><dt>Dispatch</dt><dd>{pick(selectedRun, "dispatch")}</dd></div>
               <div><dt>Attempt</dt><dd>{pick(selectedRun, "attempt") ?? 0}</dd></div>
