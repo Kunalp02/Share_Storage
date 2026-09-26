@@ -4,7 +4,7 @@ Two services:
 
 - `execution-service` runs agent threads and turns.
 - `storage-service` stores files for those threads.
-- `platform-auth` checks the bearer token those services receive against the existing .NET auth service, so a platform login works on the Python APIs too.
+- `platform-auth` reads the platform bearer token (`unique_name`, `nameid`, `groups`, `role`) so a .NET login works on the Python APIs.
 - `studio-ui` is a browser for signing in through the .NET auth service, listing agents, uploading a file, and watching runs.
 
 Agent, tool, knowledge-base, and model configuration stay in their existing services. Copy each `.env.example` to `.env` and fill in the URLs and secrets there. Do not commit those files.

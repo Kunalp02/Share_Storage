@@ -29,9 +29,9 @@ Run the worker as a second process. It claims queued runs, extends leases, marks
 
 `POST /api/v1/agents/{agentId}/threads/{threadId}/runs` with `{ "input": "...", "inputArtifactIds": [], "stream": false, "background": false }`.
 
-Send the same `Authorization: Bearer` token the .NET configuration APIs accept. Execution asks `GET /api/v1/auth/me` on the auth service before it does any work. A rejected or logged-out token stops here. The same token is then forwarded to Agent Config, which still decides whether that user can see the agent.
+Send the same `Authorization: Bearer` token the .NET configuration APIs accept. Execution reads the user from that token (`unique_name`, `nameid`, `groups`, `role`) and does not call `GET /api/v1/auth/me`. The same token is then forwarded to Agent Config, which still decides whether that user can see the agent.
 
-Set `AUTH_REQUIRED_PERMISSIONS` to comma-separated permission codes when a studio route must match a .NET role gate. Leave it empty to allow every accepted platform user. `AUTH_PRINCIPAL_CACHE_SECONDS=0` checks the auth service on every call, so logout is visible immediately.
+Set `AUTH_REQUIRED_PERMISSIONS` to comma-separated permission codes when a studio route must match a .NET role gate. Leave it empty to allow every token that is still inside its expiry.
 
 ## Published API
 

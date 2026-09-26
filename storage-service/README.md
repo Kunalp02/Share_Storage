@@ -18,7 +18,7 @@ Logs include `requestId`. Set `LOG_FORMAT=json` in production. File contents and
 
 ## Caller API
 
-`POST /api/v1/agents/{agentId}/artifacts/init` with the same platform bearer token the .NET APIs accept. Storage confirms that token with the auth service, then forwards it to Agent Config. If `threadId` is omitted, storage asks execution to open a thread.
+`POST /api/v1/agents/{agentId}/artifacts/init` with the same platform bearer token the .NET APIs accept. Storage reads the user from that token, then forwards it to Agent Config. If `threadId` is omitted, storage asks execution to open a thread.
 
 `POST /api/v1/artifacts/{artifactId}/complete` after the client uploads to the presigned URL.
 

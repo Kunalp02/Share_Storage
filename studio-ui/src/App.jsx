@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { clearSession, loadSession, login, logout, me, pick, saveSession } from "./api";
+import { useState } from "react";
+import { clearSession, loadSession, login, logout, pick, saveSession } from "./api";
 import { Activity } from "./Activity";
 import { Studio } from "./Studio";
 
@@ -33,26 +33,6 @@ export function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState("activity");
-
-  useEffect(() => {
-    if (!session?.token) return undefined;
-    let cancelled = false;
-    me(session.token)
-      .then((identity) => {
-        if (cancelled) return;
-        const next = { ...session, identity };
-        saveSession(next);
-        setSession(next);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        clearSession();
-        setSession(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [session?.token]);
 
   async function onLogin(event) {
     event.preventDefault();

@@ -82,8 +82,8 @@ def test_studio_thread_requires_platform_token(monkeypatch):
     )
     assert missing.status_code == 401
     assert missing.json()["code"] == "UNAUTHORIZED"
-    assert rejected.status_code == 503
-    assert rejected.json()["code"] == "AUTH_NOT_CONFIGURED"
+    assert rejected.status_code == 401
+    assert rejected.json()["code"] == "UNAUTHORIZED"
     asyncio.run(container_module.shutdown_container())
     get_settings.cache_clear()
 
