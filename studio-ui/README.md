@@ -1,0 +1,28 @@
+# Studio UI
+
+Browser for signing in and trying an agent. The page never talks to Keycloak. It posts the username and password to the .NET auth service, keeps the platform token in the browser session, and sends that token on later calls.
+
+## What you can do
+
+- Sign in and see the user, groups, and permission codes returned by auth.
+- List agents from Agent Config (`GET /api/v1/agents`). If that list is unavailable, paste an agent id.
+- Open a test or production thread.
+- Attach a text file, then send a message on that thread.
+- Watch runs for the thread, including status, output, errors, steps, and file ids.
+
+## Run
+
+```bash
+cp .env.example .env
+npm install
+npm run dev
+```
+
+The dev server listens on port 5173 and proxies:
+
+- `/platform/auth` to `AUTH_SERVICE_URL`
+- `/platform/agents` to `AGENT_CONFIG_URL`
+- `/platform/execution` to `EXECUTION_SERVICE_URL`
+- `/platform/storage` to `STORAGE_SERVICE_URL`
+
+The file bytes are uploaded from the browser to the presigned storage URL. MinIO must allow that browser origin on `PUT`.

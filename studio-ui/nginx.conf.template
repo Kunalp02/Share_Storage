@@ -1,0 +1,35 @@
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+  client_max_body_size 20m;
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+
+  location /platform/auth/ {
+    proxy_pass ${AUTH_UPSTREAM}/;
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Authorization $http_authorization;
+  }
+
+  location /platform/agents/ {
+    proxy_pass ${AGENT_UPSTREAM}/;
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Authorization $http_authorization;
+  }
+
+  location /platform/execution/ {
+    proxy_pass ${EXECUTION_UPSTREAM}/;
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_buffering off;
+  }
+
+  location /platform/storage/ {
+    proxy_pass ${STORAGE_UPSTREAM}/;
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Authorization $http_authorization;
+  }
+}

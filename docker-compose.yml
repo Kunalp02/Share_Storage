@@ -19,3 +19,17 @@ services:
     env_file: ./storage-service/.env
     ports:
       - "8770:8770"
+  studio:
+    build:
+      context: .
+      dockerfile: studio-ui/Dockerfile
+    environment:
+      AUTH_UPSTREAM: http://host.docker.internal:8500
+      AGENT_UPSTREAM: http://host.docker.internal:8504
+      EXECUTION_UPSTREAM: http://execution:8765
+      STORAGE_UPSTREAM: http://storage:8770
+    ports:
+      - "5173:80"
+    depends_on:
+      - execution
+      - storage
