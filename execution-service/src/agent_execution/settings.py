@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     persist_conversation_memory: bool = True
     conversation_max_turn_pairs: int = 10
     conversation_max_chars: int = 8000
+    context_window_tokens: int = 8192
+    context_output_reserve_tokens: int = 2048
     max_tool_rounds: int = 5
 
     execution_database_url: str = ""
@@ -65,6 +67,11 @@ class Settings(BaseSettings):
     worker_id: str = ""
     artifact_prompt_max_chars: int = 12000
     persist_output_artifacts: bool = True
+
+    def context_input_budget_chars(self) -> int:
+        window = max(1, self.context_window_tokens)
+        reserve = min(max(0, self.context_output_reserve_tokens), window - 1)
+        return max(500, (window - reserve) * 4)
 
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]

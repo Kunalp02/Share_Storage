@@ -26,7 +26,7 @@ from agent_execution.schemas.runtime import (
 from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
 from agent_execution.services.conversation_memory_service import ConversationMemoryService
 from agent_execution.services.conversation_models import ConversationHistory, ConversationTurn, MemoryContext
-from agent_execution.services.deployment_service import hash_api_key
+from agent_execution.services.deployment_service import DeploymentService, hash_api_key
 from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.run_policy import pins_manifest, status_after_failure
 from agent_execution.schemas.runs import RunStatus
@@ -232,3 +232,58 @@ async def test_tool_outage_returns_a_user_message_for_the_model():
     assert payload["status"] == "unavailable"
     assert "Something went wrong" in payload["tell_user"]
     assert update["messages"][-1]["role"] == "tool"
+
+
+def test_prompt_budget_drops_knowledge_before_the_system_prompt():
+    manifest = _manifest(system_prompt="Stay helpful.")
+    prompt, traces = PromptCompositionService.compose_within_budget(
+        manifest,
+        "Previous conversation (most recent last):\nUser: old fact",
+        ["KB: Policies\n" + ("claim " * 80)],
+        "Attached files:\n\n" + ("x" * 500),
+        "What is the policy?",
+        budget_chars=180,
+    )
+    assert "Stay helpful." in prompt
+    assert "context.trimmed:files" in traces or "context.trimmed:knowledge" in traces
+    assert len(prompt) + len("What is the policy?") <= 180
+
+
+def test_prompt_budget_rejects_a_system_prompt_that_cannot_fit():
+    manifest = _manifest(system_prompt="S" * 300)
+    with pytest.raises(ServiceError) as exc:
+        PromptCompositionService.compose_within_budget(manifest, None, [], None, "hi", budget_chars=50)
+    assert exc.value.code == "CONTEXT_TOO_LARGE"
+
+
+@pytest.mark.asyncio
+async def test_published_execute_key_must_match_the_agent_and_the_agent_must_be_published():
+    agent_id = uuid4()
+
+    class _Repo:
+        async def get_by_api_key_hash(self, digest):
+            assert digest == hash_api_key("ak_live")
+            return {"agent_id": agent_id, "slug": "claims-bot", "enabled": True}
+
+    class _Manifests:
+        def __init__(self, published: bool) -> None:
+            self.published = published
+
+        async def resolve(self, resolved_id, bearer_token, *, revision_id=None, published_only=False):
+            if published_only and not self.published:
+                raise ServiceError("AGENT_NOT_PUBLISHED", "This caller can only run a published agent revision.", 400)
+            return _manifest(status="Published" if self.published else "Draft")
+
+    published = DeploymentService(_Repo(), _Manifests(True))
+    row = await published.authenticate_for_agent(agent_id, "ak_live")
+    assert row["slug"] == "claims-bot"
+    await published.require_published(agent_id)
+
+    with pytest.raises(ServiceError) as wrong_agent:
+        await published.authenticate_for_agent(uuid4(), "ak_live")
+    assert wrong_agent.value.code == "UNAUTHORIZED"
+
+    draft = DeploymentService(_Repo(), _Manifests(False))
+    with pytest.raises(ServiceError) as unpublished:
+        await draft.require_published(agent_id)
+    assert unpublished.value.code == "AGENT_NOT_PUBLISHED"

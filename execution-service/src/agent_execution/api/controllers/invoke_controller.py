@@ -22,6 +22,7 @@ class InvokeController(ApiController):
         router.post("/invoke/{slug}/threads/{thread_id}/messages", tags=["invoke"])(self.message)
         router.post("/invoke/{slug}", tags=["invoke"])(self.invoke_once)
         router.get("/invoke/{slug}/runs/{run_id}", response_model=RunResponse, tags=["invoke"])(self.get_run)
+        router.post("/agents/{agent_id}/execute", tags=["invoke"])(self.execute)
 
     async def open_thread(
         self,
@@ -76,6 +77,37 @@ class InvokeController(ApiController):
             thread_id = thread.thread_id
         return await _dispatch(
             service, deployment["agent_id"], thread_id, _to_run_request(body), request, started_by=f"api:{slug}"
+        )
+
+    async def execute(
+        self,
+        agent_id: UUID,
+        body: InvokeRequest,
+        request: Request,
+        container: Annotated[ApplicationContainer, Depends(get_app_container)],
+        service: Annotated[AgentExecutionService, Depends(get_execution_service)],
+        api_key: Annotated[str, Depends(get_api_key)],
+    ):
+        deployment = await container.deployment_service.authenticate_for_agent(agent_id, api_key)
+        await container.deployment_service.require_published(agent_id)
+        slug = deployment["slug"]
+        if body.thread_id:
+            thread_id = body.thread_id
+            await self._owned_thread(container, deployment, thread_id)
+        else:
+            thread = await container.thread_service.create(
+                agent_id,
+                CreateThreadRequest(execution_type=ExecutionType.PRODUCTION, revision_id=deployment["revision_id"]),
+                channel=Channel.API,
+                bearer_token=None,
+                triggered_by=f"api:{slug}",
+                deployment_id=deployment["deployment_id"],
+                revision_id=deployment["revision_id"],
+                retention_policy=RetentionPolicy(deployment["retention_policy"]),
+            )
+            thread_id = thread.thread_id
+        return await _dispatch(
+            service, agent_id, thread_id, _to_run_request(body), request, started_by=f"api:{slug}"
         )
 
     async def get_run(

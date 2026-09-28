@@ -93,12 +93,16 @@ class AgentGraphNodes:
             history_block, history_for_prompt, history_truncated = self._ctx.memory_service.history_for_prompt(history)
 
         instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
-        system_prompt = PromptCompositionService.compose(
+        system_prompt, trim_steps = PromptCompositionService.compose_within_budget(
             manifest,
             _join_blocks(instructions, history_block),
             kb_blocks,
             artifact_block,
+            user_input,
+            self._ctx.settings.context_input_budget_chars(),
         )
+        if "context.trimmed:history" in trim_steps:
+            history_truncated = True
         return {
             "session_id": session_id,
             "manifest": manifest.model_dump(mode="json"),
@@ -121,7 +125,11 @@ class AgentGraphNodes:
             "retrieved_context": retrieved_context,
             "artifact_block": artifact_block,
             "stop_reason": None,
-            "steps": ["prepare_context", *[item["trace"] for item in retrieved_context if item.get("trace")]],
+            "steps": [
+                "prepare_context",
+                *[item["trace"] for item in retrieved_context if item.get("trace")],
+                *trim_steps,
+            ],
         }
 
     async def _artifact_block(self, artifact_ids: list[str]) -> str | None:

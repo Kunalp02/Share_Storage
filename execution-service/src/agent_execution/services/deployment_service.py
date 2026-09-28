@@ -79,10 +79,25 @@ class DeploymentService:
         return [self._row(row) for row in await self._repo.list_for_agent(agent_id)]
 
     async def authenticate(self, slug: str, api_key: str | None):
+        row = await self._row_for_key(api_key)
+        if row["slug"] != slug:
+            raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
+        return row
+
+    async def authenticate_for_agent(self, agent_id: UUID, api_key: str | None):
+        row = await self._row_for_key(api_key)
+        if row["agent_id"] != agent_id:
+            raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
+        return row
+
+    async def require_published(self, agent_id: UUID) -> None:
+        await self._manifests.resolve(agent_id, None, published_only=True)
+
+    async def _row_for_key(self, api_key: str | None):
         if not api_key:
             raise ServiceError("UNAUTHORIZED", "X-Api-Key is required.", 401)
         row = await self._repo.get_by_api_key_hash(hash_api_key(api_key))
-        if row is None or row["slug"] != slug or not row["enabled"]:
+        if row is None or not row["enabled"]:
             raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
         return row
 
