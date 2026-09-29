@@ -1,0 +1,235 @@
+Copy-paste pack — 2026-09-28 19:29 UTC
+Published execute by agent id, draft agents blocked, context budget.
+
+How to call a published agent
+  POST /api/v1/agents/{agentId}/execute
+  Header: X-Api-Key: ak_...
+  Body first message: { "input": "hello" }
+  Body next message in the same chat: { "input": "and the next question", "threadId": "<threadId from the first reply>" }
+  A second chat is a new call with no threadId. Save each returned threadId separately.
+  If the agent is not published, this call returns 400 AGENT_NOT_PUBLISHED.
+  Studio test is unchanged: bearer token, executionType TEST, live draft.
+
+================================================================================
+FILE: execution-service/.env.example
+REPLACE the three lines CONVERSATION_MAX_TURN_PAIRS, CONVERSATION_MAX_CHARS, MAX_TOOL_ROUNDS
+WITH:
+================================================================================
+CONVERSATION_MAX_TURN_PAIRS=10
+CONVERSATION_MAX_CHARS=8000
+CONTEXT_WINDOW_TOKENS=8192
+CONTEXT_OUTPUT_RESERVE_TOKENS=2048
+MAX_TOOL_ROUNDS=5
+
+================================================================================
+FILE: execution-service/src/agent_execution/settings.py
+ADD these two fields under conversation_max_chars
+================================================================================
+    context_window_tokens: int = 8192
+    context_output_reserve_tokens: int = 2048
+
+ADD this method on the Settings class, above cors_origin_list
+================================================================================
+    def context_input_budget_chars(self) -> int:
+        window = max(1, self.context_window_tokens)
+        reserve = min(max(0, self.context_output_reserve_tokens), window - 1)
+        return max(500, (window - reserve) * 4)
+
+================================================================================
+FILE: execution-service/src/agent_execution/services/prompt_composition_service.py
+REPLACE the whole file
+================================================================================
+from __future__ import annotations
+
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.schemas.runtime import RuntimeManifest
+
+
+class PromptCompositionService:
+    @staticmethod
+    def compose(
+        manifest: RuntimeManifest,
+        memory_block: str | None,
+        kb_blocks: list[str],
+        artifact_block: str | None = None,
+    ) -> str:
+        sections = [manifest.system_prompt.strip()]
+        if memory_block:
+            sections.append(memory_block)
+        if kb_blocks:
+            sections.append("Retrieved knowledge base context:\n" + "\n\n".join(kb_blocks))
+        if artifact_block:
+            sections.append(artifact_block)
+        sections.append("Respond to the user message.")
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def compose_within_budget(
+        manifest: RuntimeManifest,
+        memory_block: str | None,
+        kb_blocks: list[str],
+        artifact_block: str | None,
+        user_input: str,
+        budget_chars: int,
+    ) -> tuple[str, list[str]]:
+        """Keep the system prompt and the new message. Shorten history, knowledge, then files."""
+        system = manifest.system_prompt.strip()
+        if len(system) + len(user_input) > budget_chars:
+            raise ServiceError(
+                "CONTEXT_TOO_LARGE",
+                "The system prompt and the new message are larger than the context budget.",
+                400,
+            )
+        memory = memory_block
+        knowledge = list(kb_blocks)
+        files = artifact_block
+        traces: list[str] = []
+
+        def composed() -> str:
+            return PromptCompositionService.compose(manifest, memory, knowledge, files)
+
+        while len(composed()) + len(user_input) > budget_chars:
+            if files and len(files) > 200:
+                files = files[: max(200, len(files) // 2)]
+                _add_trace(traces, "context.trimmed:files")
+                continue
+            if knowledge:
+                knowledge.pop()
+                _add_trace(traces, "context.trimmed:knowledge")
+                continue
+            if memory and len(memory) > 200:
+                memory = memory[len(memory) // 2 :]
+                _add_trace(traces, "context.trimmed:history")
+                continue
+            files = None
+            knowledge = []
+            memory = None
+            break
+        prompt = composed()
+        if len(prompt) + len(user_input) > budget_chars:
+            raise ServiceError(
+                "CONTEXT_TOO_LARGE",
+                "The system prompt and the new message are larger than the context budget.",
+                400,
+            )
+        return prompt, traces
+
+
+def _add_trace(traces: list[str], step: str) -> None:
+    if step not in traces:
+        traces.append(step)
+
+================================================================================
+FILE: execution-service/src/agent_execution/agents/graph/nodes.py
+REPLACE the block that starts with
+    instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
+and ends at the steps list inside prepare_context
+WITH:
+================================================================================
+        instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
+        system_prompt, trim_steps = PromptCompositionService.compose_within_budget(
+            manifest,
+            _join_blocks(instructions, history_block),
+            kb_blocks,
+            artifact_block,
+            user_input,
+            self._ctx.settings.context_input_budget_chars(),
+        )
+        if "context.trimmed:history" in trim_steps:
+            history_truncated = True
+        return {
+            "session_id": session_id,
+            "manifest": manifest.model_dump(mode="json"),
+            "system_prompt": system_prompt,
+            "llm_input": user_input,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "history_turns": [{"role": turn.role, "content": turn.content} for turn in history.turns],
+            "memory_scope": memory_cfg.scope.value if memory_cfg.scope else None,
+            "history_total_turns": len(history.turns),
+            "history_turns_in_prompt": len(history_for_prompt.turns),
+            "history_truncated": history_truncated,
+            "has_tools": manifest.has_tools,
+            "tool_round": 0,
+            "max_tool_rounds": self._ctx.settings.max_tool_rounds,
+            "tool_calls": [],
+            "tool_results": [],
+            "retrieved_context": retrieved_context,
+            "artifact_block": artifact_block,
+            "stop_reason": None,
+            "steps": [
+                "prepare_context",
+                *[item["trace"] for item in retrieved_context if item.get("trace")],
+                *trim_steps,
+            ],
+        }
+
+================================================================================
+FILE: execution-service/src/agent_execution/services/deployment_service.py
+REPLACE the method authenticate (the whole async def authenticate through its return row)
+WITH these four methods:
+================================================================================
+    async def authenticate(self, slug: str, api_key: str | None):
+        row = await self._row_for_key(api_key)
+        if row["slug"] != slug:
+            raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
+        return row
+
+    async def authenticate_for_agent(self, agent_id: UUID, api_key: str | None):
+        row = await self._row_for_key(api_key)
+        if row["agent_id"] != agent_id:
+            raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
+        return row
+
+    async def require_published(self, agent_id: UUID) -> None:
+        await self._manifests.resolve(agent_id, None, published_only=True)
+
+    async def _row_for_key(self, api_key: str | None):
+        if not api_key:
+            raise ServiceError("UNAUTHORIZED", "X-Api-Key is required.", 401)
+        row = await self._repo.get_by_api_key_hash(hash_api_key(api_key))
+        if row is None or not row["enabled"]:
+            raise ServiceError("UNAUTHORIZED", "API key is not valid for this agent.", 401)
+        return row
+
+================================================================================
+FILE: execution-service/src/agent_execution/api/controllers/invoke_controller.py
+1) Inside register(), after the get_run route line, ADD:
+================================================================================
+        router.post("/agents/{agent_id}/execute", tags=["invoke"])(self.execute)
+
+================================================================================
+2) ADD this method on InvokeController, just before get_run:
+================================================================================
+    async def execute(
+        self,
+        agent_id: UUID,
+        body: InvokeRequest,
+        request: Request,
+        container: Annotated[ApplicationContainer, Depends(get_app_container)],
+        service: Annotated[AgentExecutionService, Depends(get_execution_service)],
+        api_key: Annotated[str, Depends(get_api_key)],
+    ):
+        deployment = await container.deployment_service.authenticate_for_agent(agent_id, api_key)
+        await container.deployment_service.require_published(agent_id)
+        slug = deployment["slug"]
+        if body.thread_id:
+            thread_id = body.thread_id
+            await self._owned_thread(container, deployment, thread_id)
+        else:
+            thread = await container.thread_service.create(
+                agent_id,
+                CreateThreadRequest(execution_type=ExecutionType.PRODUCTION, revision_id=deployment["revision_id"]),
+                channel=Channel.API,
+                bearer_token=None,
+                triggered_by=f"api:{slug}",
+                deployment_id=deployment["deployment_id"],
+                revision_id=deployment["revision_id"],
+                retention_policy=RetentionPolicy(deployment["retention_policy"]),
+            )
+            thread_id = thread.thread_id
+        return await _dispatch(
+            service, agent_id, thread_id, _to_run_request(body), request, started_by=f"api:{slug}"
+        )
