@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     context_window_tokens: int = 8192
     context_output_reserve_tokens: int = 2048
     max_tool_rounds: int = 5
+    public_base_url: str = ""
+    api_key_encryption_secret: str = "dev-only-change-me"
 
     execution_database_url: str = ""
     conversation_store_database_url: str = ""

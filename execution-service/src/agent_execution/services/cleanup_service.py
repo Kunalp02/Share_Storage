@@ -25,6 +25,7 @@ class CleanupService:
         self._storage = storage
 
     async def expire_batch(self) -> int:
+        await self._conversations.delete_expired()
         rows = await self._threads.find_expired(limit=50)
         count = 0
         for row in rows:

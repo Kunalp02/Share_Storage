@@ -65,7 +65,9 @@ class ApplicationContainer:
         self.runs = RunRepository(self.database)
         self.deployments = DeploymentRepository(self.database)
         self.thread_service = ThreadService(self.settings, self.threads, self.graph_context.manifest_service)
-        self.deployment_service = DeploymentService(self.deployments, self.graph_context.manifest_service)
+        self.deployment_service = DeploymentService(
+            self.deployments, self.graph_context.manifest_service, self.settings
+        )
         self.execution_service = AgentExecutionService(
             self.settings,
             self.graph_context,

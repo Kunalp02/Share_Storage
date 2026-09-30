@@ -112,6 +112,20 @@ SCHEMA = [
     CREATE INDEX IF NOT EXISTS ix_conversation_execution
         ON conversation_histories (agent_id, execution_id)
     """,
+    """
+    ALTER TABLE deployments ADD COLUMN IF NOT EXISTS api_key_enc TEXT NULL
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_deployments_agent ON deployments (agent_id)
+    """,
+    """
+    ALTER TABLE conversation_histories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_conversation_expires
+        ON conversation_histories (expires_at)
+        WHERE expires_at IS NOT NULL
+    """,
 ]
 
 

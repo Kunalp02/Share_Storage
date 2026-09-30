@@ -11,6 +11,8 @@ class AgentGraphState(TypedDict, total=False):
     org_id: str | None
     bearer_token: str | None
     thread_id: str
+    thread_expires_at: str | None
+    retention_policy: str | None
     run_id: str
     execution_type: str | None
     input_artifact_ids: list[str]

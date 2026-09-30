@@ -383,6 +383,8 @@ class AgentExecutionService:
             "execution_type": thread["execution_type"],
             "input_artifact_ids": [str(item) for item in request.input_artifact_ids],
             "session_id": str(thread["thread_id"]),
+            "thread_expires_at": thread["expires_at"].isoformat() if thread["expires_at"] else None,
+            "retention_policy": thread["retention_policy"],
             "org_id": request.org_id,
             "bearer_token": bearer_token,
             "manifest": manifest.model_dump(mode="json"),

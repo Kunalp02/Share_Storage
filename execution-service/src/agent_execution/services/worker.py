@@ -29,9 +29,13 @@ class ExecutionWorker:
         self._last_cleanup = 0.0
 
     async def run_forever(self) -> None:
-        logger.info("Execution worker %s started", self._worker_id)
+        logger.info(
+            "Execution worker %s started. It claims background runs, retries expired leases, and expires threads.",
+            self._worker_id,
+        )
         while True:
             try:
+                await self._maybe_cleanup()
                 failed = await self._cleanup.fail_expired_sync_runs()
                 if failed:
                     logger.info("Marked %s interrupted sync run(s) as failed", failed)
@@ -39,7 +43,6 @@ class ExecutionWorker:
                 if claimed is not None:
                     await self._execution.execute_claimed(claimed, self._worker_id)
                     continue
-                await self._maybe_cleanup()
             except Exception:
                 logger.exception("Worker iteration failed")
             await asyncio.sleep(self._settings.worker_poll_seconds)

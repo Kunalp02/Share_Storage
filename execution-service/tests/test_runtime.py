@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,6 +16,8 @@ from agent_execution.agents.graph.routing import route_after_llm
 from agent_execution.infrastructure.platform.rag_ask_client import RagAskClient
 from agent_execution.services.manifest_service import RagContextService
 from agent_execution.core.exceptions import ServiceError
+from agent_execution.infrastructure.conversation_store.session_key import ConversationSessionKey
+from agent_execution.schemas.runs import CreateDeploymentRequest, RunStatus
 from agent_execution.schemas.runtime import (
     AgentMemoryScope,
     KnowledgeBaseMode,
@@ -26,10 +29,11 @@ from agent_execution.schemas.runtime import (
 from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
 from agent_execution.services.conversation_memory_service import ConversationMemoryService
 from agent_execution.services.conversation_models import ConversationHistory, ConversationTurn, MemoryContext
+from agent_execution.services.context_manager import ContextManager
 from agent_execution.services.deployment_service import DeploymentService, hash_api_key
+from agent_execution.services.key_crypto import decrypt_key, encrypt_key
 from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.run_policy import pins_manifest, status_after_failure
-from agent_execution.schemas.runs import RunStatus
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.infrastructure.conversation_store.memory_store import InMemoryConversationHistoryStore
 
@@ -144,6 +148,134 @@ async def test_studio_test_thread_does_not_snapshot_draft():
     )
     assert repo.rows[0]["manifest_snapshot"] is None
     assert repo.rows[0]["execution_type"] == "TEST"
+
+
+def test_context_budget_drops_files_before_the_system_prompt():
+    manifest = _manifest(system_prompt="Stay short.")
+    prompt, traces = PromptCompositionService.compose_within_budget(
+        manifest,
+        "history " * 40,
+        ["knowledge " * 40],
+        "file " * 80,
+        "hello",
+        budget_chars=180,
+    )
+    assert "Stay short." in prompt
+    assert "hello" not in prompt
+    assert traces[0] == "context.trimmed:files"
+
+
+def test_api_key_round_trip_and_replacement_when_unreadable():
+    secret = "unit-test-secret"
+    token = encrypt_key(secret, "ak_visible")
+    assert decrypt_key(secret, token) == "ak_visible"
+    assert decrypt_key("other-secret", token) is None
+
+
+class _Deployments:
+    def __init__(self, row=None) -> None:
+        self.row = row
+        self.rotated = None
+
+    async def get_by_agent(self, agent_id):
+        return self.row
+
+    async def get_by_slug(self, slug):
+        return None
+
+    async def insert(self, **kwargs):
+        self.row = {
+            "deployment_id": kwargs["deployment_id"],
+            "agent_id": kwargs["agent_id"],
+            "slug": kwargs["slug"],
+            "revision_id": kwargs["revision_id"],
+            "api_key_hash": kwargs["api_key_hash"],
+            "api_key_enc": kwargs["api_key_enc"],
+            "retention_policy": kwargs["retention_policy"],
+            "enabled": True,
+            "created_at": None,
+        }
+
+    async def rotate_key(self, deployment_id, api_key_hash, api_key_enc):
+        self.rotated = (deployment_id, api_key_hash, api_key_enc)
+        self.row = {**self.row, "api_key_hash": api_key_hash, "api_key_enc": api_key_enc}
+
+    async def list_for_agent(self, agent_id):
+        return [self.row] if self.row else []
+
+
+class _Settings:
+    api_key_encryption_secret = "unit-test-secret"
+    public_base_url = "https://runtime.example"
+    conversation_max_turn_pairs = 10
+    conversation_max_chars = 8000
+    memory_cache_ttl_seconds = 30
+    persist_conversation_memory = True
+
+    @staticmethod
+    def context_input_budget_chars() -> int:
+        return 500
+
+
+@pytest.mark.asyncio
+async def test_existing_deployment_without_a_stored_key_reissues_one():
+    agent_id = uuid4()
+    repo = _Deployments(
+        {
+            "deployment_id": uuid4(),
+            "agent_id": agent_id,
+            "slug": "claims",
+            "revision_id": None,
+            "retention_policy": "PERMANENT",
+            "enabled": True,
+            "created_at": None,
+            "api_key_enc": None,
+        }
+    )
+    service = DeploymentService(repo, _Manifests(published=True), _Settings())
+    created = await service.create(agent_id, CreateDeploymentRequest(), "token", "http://localhost/")
+    assert created.api_key.startswith("ak_")
+    assert created.key_reissued is True
+    assert created.chat_url == f"https://runtime.example/api/v1/agents/{agent_id}/chat"
+    assert decrypt_key(_Settings.api_key_encryption_secret, repo.row["api_key_enc"]) == created.api_key
+
+
+@pytest.mark.asyncio
+async def test_context_manager_keeps_memory_on_the_thread_expiry():
+    store = InMemoryConversationHistoryStore()
+    settings = _Settings()
+    memory = ConversationMemoryService(settings, store)
+    manager = ContextManager(settings, memory, store, _Rag(), _Storage())
+    manifest = _manifest()
+    thread_id = uuid4()
+    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+    thread = {"thread_id": thread_id, "expires_at": expires, "retention_policy": "TEMPORARY"}
+    prepared = await manager.prepare(
+        manifest=manifest,
+        thread=thread,
+        user_input="hello",
+        artifact_ids=[],
+        bearer_token=None,
+    )
+    assert "You are helpful." in prepared.system_prompt
+    saved = await manager.remember(manifest=manifest, thread=thread, user_input="hello", assistant_text="hi")
+    assert saved is True
+    key = ConversationSessionKey(manifest.agent_id, str(thread_id), "")
+    loaded, _ = await store.get_history(key)
+    assert loaded.turns[-1].content == "hi"
+    store._sessions[f"{manifest.agent_id}:{thread_id}:"].expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    expired, _ = await store.get_history(key)
+    assert expired.turns == []
+
+
+class _Rag:
+    async def fetch_context(self, manifest, user_input, bearer_token):
+        return [], []
+
+
+class _Storage:
+    async def fetch_artifact_text(self, artifact_id):
+        return {"filename": "a.txt", "text": "", "truncated": False}
 
 
 @pytest.mark.asyncio
@@ -274,7 +406,7 @@ async def test_published_execute_key_must_match_the_agent_and_the_agent_must_be_
                 raise ServiceError("AGENT_NOT_PUBLISHED", "This caller can only run a published agent revision.", 400)
             return _manifest(status="Published" if self.published else "Draft")
 
-    published = DeploymentService(_Repo(), _Manifests(True))
+    published = DeploymentService(_Repo(), _Manifests(True), _Settings())
     row = await published.authenticate_for_agent(agent_id, "ak_live")
     assert row["slug"] == "claims-bot"
     await published.require_published(agent_id)
@@ -283,7 +415,7 @@ async def test_published_execute_key_must_match_the_agent_and_the_agent_must_be_
         await published.authenticate_for_agent(uuid4(), "ak_live")
     assert wrong_agent.value.code == "UNAUTHORIZED"
 
-    draft = DeploymentService(_Repo(), _Manifests(False))
+    draft = DeploymentService(_Repo(), _Manifests(False), _Settings())
     with pytest.raises(ServiceError) as unpublished:
         await draft.require_published(agent_id)
     assert unpublished.value.code == "AGENT_NOT_PUBLISHED"

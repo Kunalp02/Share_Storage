@@ -31,7 +31,7 @@ class PromptCompositionService:
         user_input: str,
         budget_chars: int,
     ) -> tuple[str, list[str]]:
-        """Keep the system prompt and the new message. Shorten history, knowledge, then files."""
+        """Keep the system prompt and the new message. Drop files, then knowledge, then older history."""
         system = manifest.system_prompt.strip()
         if len(system) + len(user_input) > budget_chars:
             raise ServiceError(

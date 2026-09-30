@@ -11,9 +11,6 @@ from agent_execution.agents.graph.state import AgentGraphState
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.infrastructure.llm_gateway import LlmToolCall
 from agent_execution.schemas.runtime import RuntimeManifest
-from agent_execution.services.conversation_memory_service import ConversationMemoryService
-from agent_execution.services.conversation_models import ConversationHistory, MemoryContext
-from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.tool_definition_service import ToolDefinitionService
 
 logger = logging.getLogger(__name__)
@@ -22,11 +19,6 @@ _FINALIZE_PROMPT = (
     "You have reached the maximum number of tool calls allowed for this request. "
     "Provide your best final answer using the information gathered so far."
 )
-
-
-def _join_blocks(*parts: str | None) -> str | None:
-    blocks = [part for part in parts if part]
-    return "\n\n".join(blocks) if blocks else None
 
 
 def _tool_calls_to_state(calls: list[LlmToolCall]) -> list[dict[str, Any]]:
@@ -64,88 +56,33 @@ class AgentGraphNodes:
     async def prepare_context(self, state: AgentGraphState) -> AgentGraphState:
         agent_id = uuid.UUID(state["agent_id"])
         bearer_token = state.get("bearer_token")
-        session_id = state.get("session_id") or state.get("thread_id") or str(uuid.uuid4())
-        mem_context = MemoryContext(session_id=session_id, org_id=state.get("org_id"))
-        user_input = state["user_input"]
-
         if state.get("manifest"):
             manifest = RuntimeManifest.model_validate(state["manifest"])
         else:
             manifest = await self._ctx.manifest_service.resolve(agent_id, bearer_token)
-
-        memory_cfg = manifest.memory
-        self._ctx.memory_service.validate_context(memory_cfg, mem_context)
-        history = (
-            await self._ctx.memory_service.load_history(agent_id, memory_cfg, mem_context)
-            if memory_cfg.enabled
-            else ConversationHistory()
+        thread = {
+            "thread_id": state.get("thread_id") or state.get("session_id") or str(uuid.uuid4()),
+            "expires_at": state.get("thread_expires_at"),
+            "retention_policy": state.get("retention_policy"),
+        }
+        prepared = await self._ctx.context_manager.prepare(
+            manifest=manifest,
+            thread=thread,
+            user_input=state["user_input"],
+            artifact_ids=state.get("input_artifact_ids") or [],
+            bearer_token=bearer_token,
         )
-        artifact_block = await self._artifact_block(state.get("input_artifact_ids") or [])
-        kb_blocks: list[str] = []
-        retrieved_context: list[dict] = []
-        if any(kb.mode.value == "Context" for kb in manifest.knowledge_bases):
-            (kb_blocks, retrieved_context), history_parts = await asyncio.gather(
-                self._ctx.rag_service.fetch_context(manifest, user_input, bearer_token),
-                asyncio.to_thread(self._ctx.memory_service.history_for_prompt, history),
-            )
-            history_block, history_for_prompt, history_truncated = history_parts
-        else:
-            history_block, history_for_prompt, history_truncated = self._ctx.memory_service.history_for_prompt(history)
-
-        instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
-        system_prompt, trim_steps = PromptCompositionService.compose_within_budget(
-            manifest,
-            _join_blocks(instructions, history_block),
-            kb_blocks,
-            artifact_block,
-            user_input,
-            self._ctx.settings.context_input_budget_chars(),
-        )
-        if "context.trimmed:history" in trim_steps:
-            history_truncated = True
         return {
-            "session_id": session_id,
             "manifest": manifest.model_dump(mode="json"),
-            "system_prompt": system_prompt,
-            "llm_input": user_input,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
-            ],
-            "history_turns": [{"role": turn.role, "content": turn.content} for turn in history.turns],
-            "memory_scope": memory_cfg.scope.value if memory_cfg.scope else None,
-            "history_total_turns": len(history.turns),
-            "history_turns_in_prompt": len(history_for_prompt.turns),
-            "history_truncated": history_truncated,
+            **prepared.as_state(),
             "has_tools": manifest.has_tools,
             "tool_round": 0,
             "max_tool_rounds": self._ctx.settings.max_tool_rounds,
             "tool_calls": [],
             "tool_results": [],
-            "retrieved_context": retrieved_context,
-            "artifact_block": artifact_block,
             "stop_reason": None,
-            "steps": [
-                "prepare_context",
-                *[item["trace"] for item in retrieved_context if item.get("trace")],
-                *trim_steps,
-            ],
+            "steps": ["prepare_context", *prepared.steps],
         }
-
-    async def _artifact_block(self, artifact_ids: list[str]) -> str | None:
-        if not artifact_ids:
-            return None
-        sections: list[str] = []
-        for raw_id in artifact_ids:
-            payload = await self._ctx.storage.fetch_artifact_text(uuid.UUID(str(raw_id)))
-            filename = payload.get("filename") or raw_id
-            text = payload.get("text")
-            if text:
-                truncated = " (truncated)" if payload.get("truncated") else ""
-                sections.append(f"File {filename}{truncated}:\n{text}")
-            else:
-                sections.append(f"File {filename} is attached and is not text.")
-        return "Attached files:\n\n" + "\n\n".join(sections)
 
     async def call_llm(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
@@ -232,16 +169,15 @@ class AgentGraphNodes:
 
     async def persist_memory(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
-        memory_cfg = manifest.memory
-        if not self._ctx.settings.persist_conversation_memory or not memory_cfg.enabled:
-            return {"memory_persisted": False, "steps": ["persist_memory"]}
-        mem_context = MemoryContext(session_id=state["session_id"], org_id=state.get("org_id"))
-        persisted = await self._ctx.memory_service.append_exchange_safe(
-            manifest.agent_id,
-            memory_cfg,
-            mem_context,
-            state["user_input"],
-            state.get("output") or "",
+        thread = {
+            "thread_id": state.get("thread_id") or state.get("session_id"),
+            "expires_at": state.get("thread_expires_at"),
+        }
+        persisted = await self._ctx.context_manager.remember(
+            manifest=manifest,
+            thread=thread,
+            user_input=state["user_input"],
+            assistant_text=state.get("output") or "",
         )
         prior_turns = len(state.get("history_turns") or [])
         return {

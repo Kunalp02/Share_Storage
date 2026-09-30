@@ -24,9 +24,6 @@ class ThreadController(ApiController):
         router.post("/agents/{agent_id}/threads/resolve", response_model=ThreadResponse, tags=["threads"])(self.resolve)
         router.get("/agents/{agent_id}/threads/{thread_id}", response_model=ThreadResponse, tags=["threads"])(self.get)
         router.get("/agents/{agent_id}/threads", response_model=list[ThreadResponse], tags=["threads"])(self.list_threads)
-        router.post("/agents/{agent_id}/executions", response_model=ThreadResponse, tags=["threads"])(self.create_legacy)
-        router.post("/agents/{agent_id}/executions/resolve", response_model=ThreadResponse, tags=["threads"])(self.resolve)
-        router.get("/agents/{agent_id}/executions/{thread_id}", response_model=ThreadResponse, tags=["threads"])(self.get)
 
     async def create(
         self,
@@ -42,15 +39,6 @@ class ThreadController(ApiController):
             bearer_token=principal.token,
             triggered_by=principal.username or principal.subject,
         )
-
-    async def create_legacy(
-        self,
-        agent_id: UUID,
-        body: CreateThreadRequest,
-        service: Annotated[ThreadService, Depends(get_thread_service)],
-        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
-    ) -> ThreadResponse:
-        return await self.create(agent_id, body, service, principal)
 
     async def resolve(
         self,

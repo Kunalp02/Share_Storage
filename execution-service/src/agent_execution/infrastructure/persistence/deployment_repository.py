@@ -18,6 +18,7 @@ class DeploymentRepository:
         slug: str,
         revision_id: UUID | None,
         api_key_hash: str,
+        api_key_enc: str,
         retention_policy: str,
     ) -> None:
         pool = await self._database.pool()
@@ -26,14 +27,15 @@ class DeploymentRepository:
                 """
                 INSERT INTO deployments (
                     deployment_id, agent_id, slug, revision_id,
-                    api_key_hash, retention_policy, created_at
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+                    api_key_hash, api_key_enc, retention_policy, created_at
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                 """,
                 deployment_id,
                 agent_id,
                 slug,
                 revision_id,
                 api_key_hash,
+                api_key_enc,
                 retention_policy,
                 datetime.now(timezone.utc),
             )
@@ -64,4 +66,31 @@ class DeploymentRepository:
                 ORDER BY created_at DESC
                 """,
                 agent_id,
+            )
+
+    async def get_by_agent(self, agent_id: UUID):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                SELECT * FROM deployments
+                WHERE agent_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                agent_id,
+            )
+
+    async def rotate_key(self, deployment_id: UUID, api_key_hash: str, api_key_enc: str) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE deployments
+                SET api_key_hash = $2, api_key_enc = $3
+                WHERE deployment_id = $1
+                """,
+                deployment_id,
+                api_key_hash,
+                api_key_enc,
             )

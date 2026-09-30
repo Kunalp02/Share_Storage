@@ -34,14 +34,14 @@ class PostgresConversationHistoryStore:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT turns, version FROM conversation_histories
+                SELECT turns, version, expires_at FROM conversation_histories
                 WHERE agent_id = $1 AND session_id = $2 AND org_id = $3
                 """,
                 key.agent_id,
                 key.session_id,
                 key.org_id,
             )
-        if row is None:
+        if row is None or _row_expired(row["expires_at"]):
             return ConversationHistory(), None
         version = int(row["version"])
         return self._turns_from_json(row["turns"]), version if version > 0 else None
@@ -61,7 +61,7 @@ class PostgresConversationHistoryStore:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    SELECT turns, version FROM conversation_histories
+                    SELECT turns, version, expires_at FROM conversation_histories
                     WHERE agent_id = $1 AND session_id = $2 AND org_id = $3
                     FOR UPDATE
                     """,
@@ -69,8 +69,8 @@ class PostgresConversationHistoryStore:
                     key.session_id,
                     key.org_id,
                 )
-                if row is None:
-                    current_version = 0
+                if row is None or _row_expired(row["expires_at"]):
+                    current_version = 0 if row is None else int(row["version"])
                     history = ConversationHistory()
                 else:
                     current_version = int(row["version"])
@@ -107,6 +107,32 @@ class PostgresConversationHistoryStore:
                 )
         return ConversationHistory(turns=list(trimmed.turns)), next_version, truncated
 
+    async def set_retention(self, key: ConversationSessionKey, expires_at: datetime | None) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE conversation_histories
+                SET expires_at = $4
+                WHERE agent_id = $1 AND session_id = $2 AND org_id = $3
+                """,
+                key.agent_id,
+                key.session_id,
+                key.org_id,
+                expires_at,
+            )
+
+    async def delete_expired(self) -> int:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM conversation_histories
+                WHERE expires_at IS NOT NULL AND expires_at <= NOW()
+                """
+            )
+        return int(result.split()[-1])
+
     async def delete_for_thread(self, agent_id, thread_id) -> None:
         pool = await self._database.pool()
         async with pool.acquire() as conn:
@@ -122,3 +148,11 @@ class PostgresConversationHistoryStore:
 
     async def aclose(self) -> None:
         return None
+
+
+def _row_expired(expires_at: datetime | None) -> bool:
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
