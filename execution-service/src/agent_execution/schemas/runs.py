@@ -54,6 +54,7 @@ class RunResponse(BaseModel):
     input: str
     output: str | None = None
     error: str | None = None
+    error_code: str | None = Field(default=None, alias="errorCode")
     revision_id: UUID | None = Field(default=None, alias="revisionId")
     manifest_hash: str = Field(default="", alias="manifestHash")
     attempt: int = 0

@@ -27,9 +27,9 @@ The API process and the worker process share the same database. They do differen
 
 1. `POST /test` or `POST /chat` opens or continues a thread, then inserts a run.
 2. A normal run (`background` omitted or false) is executed by the API process that received the request. The process holds a lease and a heartbeat so a crash is visible. At most `MAX_INFLIGHT_RUNS` runs execute in that process at once. Extra calls get `429`.
-3. A background run is inserted as `QUEUED` and the HTTP call returns immediately. The worker process polls, claims one queued run with `FOR UPDATE SKIP LOCKED`, and executes it. The claim sets `worker_id` and a lease. A heartbeat extends the lease while the model or tools are running.
-4. If the worker dies, the lease expires. The next poll claims that run again until `RUN_MAX_ATTEMPTS`. After that the run is `FAILED`.
-5. On the same loop the worker deletes conversation memory whose expiry has passed, expires threads whose retention has passed, and fails sync runs whose lease expired because the API process died.
+3. A background run is inserted as `QUEUED` and the HTTP call returns immediately. Postgres notifies the worker. The worker also polls, so a missed notification is still picked up. It claims with `FOR UPDATE SKIP LOCKED` and runs up to `MAX_INFLIGHT_RUNS` jobs at once. The claim sets `worker_id` and a lease. A heartbeat extends the lease while the model or tools are running. Success and failure updates match that `worker_id` and attempt, so a worker whose lease was stolen cannot overwrite the result.
+4. A temporary failure (timeout, busy, or a dependency that is down) goes back to `QUEUED` after a short delay, until `RUN_MAX_ATTEMPTS`. A permanent failure, such as a context window that cannot fit, is `FAILED` on the first attempt. The run stores `errorCode` and `error` with the reason. `run.failed:<code>` is added to the steps. If the API process dies, the reason is `RUN_INTERRUPTED`. If a background worker dies and no attempts remain, the reason is `WORKER_LOST`.
+5. A separate loop deletes conversation memory whose expiry has passed and expires threads whose retention has passed. The worker writes `worker_heartbeats`. `GET /api/v1/workers` with a platform token lists each worker, when it was last seen, and whether it is still alive.
 
 Start `agent-execution` and `agent-execution-worker` as two processes. The worker does not serve HTTP.
 

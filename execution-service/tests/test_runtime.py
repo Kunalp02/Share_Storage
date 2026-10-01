@@ -33,7 +33,7 @@ from agent_execution.services.context_manager import ContextManager
 from agent_execution.services.deployment_service import DeploymentService, hash_api_key
 from agent_execution.services.key_crypto import decrypt_key, encrypt_key
 from agent_execution.services.prompt_composition_service import PromptCompositionService
-from agent_execution.services.run_policy import pins_manifest, status_after_failure
+from agent_execution.services.run_policy import describe_failure, pins_manifest, retry_delay_seconds, status_after_failure
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.infrastructure.conversation_store.memory_store import InMemoryConversationHistoryStore
 
@@ -102,6 +102,29 @@ def test_production_threads_pin_manifest_and_retries_requeue():
     assert pins_manifest(ExecutionType.TEST) is False
     assert status_after_failure(1, 3) == RunStatus.QUEUED
     assert status_after_failure(3, 3) == RunStatus.FAILED
+    assert status_after_failure(1, 3, transient=False) == RunStatus.FAILED
+
+
+def test_failure_reason_is_auditable_and_permanent_errors_do_not_retry():
+    code, message, transient = describe_failure(
+        ServiceError("CONTEXT_TOO_LARGE", "The system prompt and the new message are larger than the context budget.", 400)
+    )
+    assert code == "CONTEXT_TOO_LARGE"
+    assert "context budget" in message
+    assert transient is False
+    code, message, transient = describe_failure(ServiceError("RAG_UNAVAILABLE", "RAG ask service is unreachable.", 503))
+    assert code == "RAG_UNAVAILABLE"
+    assert transient is True
+    code, message, transient = describe_failure(TimeoutError())
+    assert code == "TIMEOUT"
+    assert "timed out" in message
+    assert transient is True
+    code, message, _ = describe_failure(RuntimeError("secret database password"))
+    assert code == "RUN_FAILED"
+    assert "password" not in message
+    assert retry_delay_seconds(1, 2, 60) == 2
+    assert retry_delay_seconds(3, 2, 60) == 8
+    assert retry_delay_seconds(10, 2, 60) == 60
 
 
 def test_api_key_hash_is_stable():

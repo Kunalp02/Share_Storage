@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     run_max_attempts: int = 3
     worker_poll_seconds: float = 1.0
     worker_id: str = ""
+    run_retry_base_seconds: float = 2.0
+    run_retry_max_seconds: float = 60.0
     artifact_prompt_max_chars: int = 12000
     persist_output_artifacts: bool = True
 

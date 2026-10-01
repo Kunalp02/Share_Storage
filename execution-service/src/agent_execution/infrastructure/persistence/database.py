@@ -57,6 +57,8 @@ SCHEMA = [
         org_id TEXT NULL,
         started_by TEXT NOT NULL DEFAULT '',
         client_ip TEXT NOT NULL DEFAULT '',
+        error_code TEXT NULL,
+        available_at TIMESTAMPTZ NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         started_at TIMESTAMPTZ NULL,
         completed_at TIMESTAMPTZ NULL
@@ -67,6 +69,19 @@ SCHEMA = [
     """,
     """
     ALTER TABLE runs ADD COLUMN IF NOT EXISTS client_ip TEXT NOT NULL DEFAULT ''
+    """,
+    """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_code TEXT NULL
+    """,
+    """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ NULL
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+        worker_id TEXT PRIMARY KEY,
+        last_seen_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
     """,
     """
     CREATE INDEX IF NOT EXISTS ix_runs_thread_created

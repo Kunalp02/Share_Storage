@@ -86,6 +86,8 @@ class RunRepository:
                 started_at,
             )
             row = await conn.fetchrow("SELECT * FROM runs WHERE run_id = $1", run_id)
+            if status == "QUEUED":
+                await conn.execute("SELECT pg_notify('execution_runs', $1)", str(run_id))
             return row, True
 
     async def get(self, run_id: UUID):
@@ -117,6 +119,7 @@ class RunRepository:
                     SELECT run_id
                     FROM runs
                     WHERE dispatch = 'ASYNC'
+                      AND (available_at IS NULL OR available_at <= NOW())
                       AND (
                         status = 'QUEUED'
                         OR (
@@ -170,25 +173,32 @@ class RunRepository:
         stop_reason: str | None,
         manifest_hash: str,
         revision_id: UUID | None,
-    ) -> None:
+        worker_id: str,
+        attempt: int,
+    ) -> bool:
         pool = await self._database.pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            updated = await conn.fetchrow(
                 """
                 UPDATE runs
                 SET status = 'SUCCEEDED',
-                    output = $2,
-                    output_artifact_ids = $3::jsonb,
-                    steps = $4::jsonb,
-                    retrieved_context = $5::jsonb,
-                    stop_reason = $6,
-                    manifest_hash = $7,
-                    revision_id = COALESCE($8, revision_id),
-                    completed_at = $9,
-                    lease_expires_at = NULL
-                WHERE run_id = $1
+                    output = $4,
+                    output_artifact_ids = $5::jsonb,
+                    steps = $6::jsonb,
+                    retrieved_context = $7::jsonb,
+                    stop_reason = $8,
+                    manifest_hash = $9,
+                    revision_id = COALESCE($10, revision_id),
+                    completed_at = $11,
+                    lease_expires_at = NULL,
+                    error = NULL,
+                    error_code = NULL
+                WHERE run_id = $1 AND worker_id = $2 AND attempt = $3 AND status = 'RUNNING'
+                RETURNING run_id
                 """,
                 run_id,
+                worker_id,
+                attempt,
                 output,
                 json.dumps(output_artifact_ids),
                 json.dumps(steps),
@@ -198,37 +208,69 @@ class RunRepository:
                 revision_id,
                 datetime.now(timezone.utc),
             )
+            return updated is not None
 
-    async def mark_failed(self, run_id: UUID, error: str, *, requeue: bool) -> None:
+    async def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        *,
+        error_code: str,
+        requeue: bool,
+        worker_id: str,
+        attempt: int,
+        available_at: datetime | None = None,
+    ) -> bool:
         pool = await self._database.pool()
+        step = f"run.retry:{error_code}" if requeue else f"run.failed:{error_code}"
         async with pool.acquire() as conn:
             if requeue:
-                await conn.execute(
+                updated = await conn.fetchrow(
                     """
                     UPDATE runs
                     SET status = 'QUEUED',
-                        error = $2,
+                        error = $4,
+                        error_code = $5,
                         worker_id = NULL,
-                        lease_expires_at = NULL
-                    WHERE run_id = $1
+                        lease_expires_at = NULL,
+                        available_at = $6,
+                        steps = steps || $7::jsonb
+                    WHERE run_id = $1 AND worker_id = $2 AND attempt = $3 AND status = 'RUNNING'
+                    RETURNING run_id
                     """,
                     run_id,
+                    worker_id,
+                    attempt,
                     error[:2000],
+                    error_code,
+                    available_at,
+                    json.dumps([step]),
                 )
-                return
-            await conn.execute(
+                if updated is not None:
+                    await conn.execute("SELECT pg_notify('execution_runs', $1)", str(run_id))
+                return updated is not None
+            updated = await conn.fetchrow(
                 """
                 UPDATE runs
                 SET status = 'FAILED',
-                    error = $2,
-                    completed_at = $3,
-                    lease_expires_at = NULL
-                WHERE run_id = $1
+                    error = $4,
+                    error_code = $5,
+                    completed_at = $6,
+                    lease_expires_at = NULL,
+                    available_at = NULL,
+                    steps = steps || $7::jsonb
+                WHERE run_id = $1 AND worker_id = $2 AND attempt = $3 AND status = 'RUNNING'
+                RETURNING run_id
                 """,
                 run_id,
+                worker_id,
+                attempt,
                 error[:2000],
+                error_code,
                 datetime.now(timezone.utc),
+                json.dumps([step]),
             )
+            return updated is not None
 
     async def fail_expired_sync(self) -> int:
         pool = await self._database.pool()
@@ -237,9 +279,11 @@ class RunRepository:
                 """
                 UPDATE runs
                 SET status = 'FAILED',
-                    error = 'Run interrupted before completion.',
+                    error_code = 'RUN_INTERRUPTED',
+                    error = 'The API process stopped before this run finished.',
                     completed_at = NOW(),
-                    lease_expires_at = NULL
+                    lease_expires_at = NULL,
+                    steps = steps || '["run.failed:RUN_INTERRUPTED"]'::jsonb
                 WHERE dispatch = 'SYNC'
                   AND status = 'RUNNING'
                   AND lease_expires_at IS NOT NULL
@@ -247,3 +291,48 @@ class RunRepository:
                 """
             )
         return int(result.split()[-1])
+
+    async def fail_abandoned_async(self) -> int:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE runs
+                SET status = 'FAILED',
+                    error_code = 'WORKER_LOST',
+                    error = 'The worker stopped and this run has no attempts left.',
+                    completed_at = NOW(),
+                    lease_expires_at = NULL,
+                    steps = steps || '["run.failed:WORKER_LOST"]'::jsonb
+                WHERE dispatch = 'ASYNC'
+                  AND status = 'RUNNING'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < NOW()
+                  AND attempt >= max_attempts
+                """
+            )
+        return int(result.split()[-1])
+
+    async def touch_worker(self, worker_id: str) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO worker_heartbeats (worker_id, last_seen_at, started_at)
+                VALUES ($1, NOW(), NOW())
+                ON CONFLICT (worker_id)
+                DO UPDATE SET last_seen_at = NOW()
+                """,
+                worker_id,
+            )
+
+    async def list_workers(self):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT worker_id, last_seen_at, started_at
+                FROM worker_heartbeats
+                ORDER BY last_seen_at DESC
+                """
+            )

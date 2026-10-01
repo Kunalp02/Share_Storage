@@ -26,7 +26,7 @@ from agent_execution.schemas.runs import (
 )
 from agent_execution.schemas.runtime import RuntimeManifest
 from agent_execution.schemas.threads import ExecutionType
-from agent_execution.services.run_policy import status_after_failure
+from agent_execution.services.run_policy import describe_failure, retry_delay_seconds, status_after_failure
 from agent_execution.services.run_slots import RunSlots
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.settings import Settings
@@ -154,11 +154,11 @@ class AgentExecutionService:
                         **persisted,
                         "steps": ["prepare_context", "call_llm_stream", "persist_memory"],
                     }
-            result = await self._finish_success(thread, run_id, manifest, final_state)
+            result = await self._finish_success(thread, row, manifest, final_state)
             yield self._sse("done", result.model_dump(mode="json"))
         except Exception as exc:
-            await self._finish_failure(row, exc)
-            yield self._sse("error", {"code": getattr(exc, "code", "RUN_FAILED"), "message": str(exc)})
+            code, message = await self._finish_failure(row, exc)
+            yield self._sse("error", {"code": code, "message": message})
         finally:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -172,20 +172,20 @@ class AgentExecutionService:
             worker_id,
             row["attempt"],
         )
-        thread = await self._threads.get_open(row["agent_id"], row["thread_id"])
-        manifest = await self._threads.manifest_for_run(thread, None)
         beat = asyncio.create_task(self._heartbeat(row["run_id"], worker_id))
-        request = CreateRunRequest(
-            input=row["input"],
-            input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
-            org_id=row["org_id"],
-        )
         try:
+            thread = await self._threads.get_open(row["agent_id"], row["thread_id"])
+            manifest = await self._threads.manifest_for_run(thread, None)
+            request = CreateRunRequest(
+                input=row["input"],
+                input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
+                org_id=row["org_id"],
+            )
             async with self._slots.acquire():
                 final_state = await self._graph.ainvoke(
                     self._initial_state(thread, request, None, manifest, row["run_id"])
                 )
-            await self._finish_success(thread, row["run_id"], manifest, final_state)
+            await self._finish_success(thread, row, manifest, final_state)
         except Exception as exc:
             logger.exception("Background run %s failed", row["run_id"])
             await self._finish_failure(row, exc)
@@ -247,7 +247,7 @@ class AgentExecutionService:
                 final_state = await self._graph.ainvoke(
                     self._initial_state(thread, request, bearer_token, manifest, row["run_id"])
                 )
-            return await self._finish_success(thread, row["run_id"], manifest, final_state)
+            return await self._finish_success(thread, row, manifest, final_state)
         except Exception as exc:
             await self._finish_failure(row, exc)
             raise
@@ -301,7 +301,8 @@ class AgentExecutionService:
                 raise ServiceError("CONFLICT", "A run with this idempotency key already exists.", 409) from exc
             raise
 
-    async def _finish_success(self, thread, run_id: UUID, manifest: RuntimeManifest, state: AgentGraphState) -> RunResult:
+    async def _finish_success(self, thread, row, manifest: RuntimeManifest, state: AgentGraphState) -> RunResult:
+        run_id = row["run_id"]
         output = state.get("output") or ""
         output_ids: list[UUID] = []
         if self._settings.persist_output_artifacts and output:
@@ -325,7 +326,7 @@ class AgentExecutionService:
             state.get("stop_reason") or "completed",
             len(output),
         )
-        await self._runs.mark_succeeded(
+        wrote = await self._runs.mark_succeeded(
             run_id,
             output=output,
             output_artifact_ids=[str(item) for item in output_ids],
@@ -334,23 +335,59 @@ class AgentExecutionService:
             stop_reason=state.get("stop_reason") or "completed",
             manifest_hash=manifest.manifest_hash,
             revision_id=manifest.revision_id,
+            worker_id=row["worker_id"] or "",
+            attempt=int(row["attempt"] or 0),
         )
+        if not wrote:
+            logger.warning(
+                "run.result_ignored runId=%s workerId=%s attempt=%s",
+                run_id,
+                row["worker_id"],
+                row["attempt"],
+            )
         return self._to_result(thread, run_id, manifest, state, output_ids)
 
-    async def _finish_failure(self, row, exc: Exception) -> None:
+    async def _finish_failure(self, row, exc: Exception) -> tuple[str, str]:
         attempt = int(row["attempt"] or 0)
+        code, message, transient = describe_failure(exc)
         requeue = (
             row["dispatch"] == Dispatch.ASYNC.value
-            and status_after_failure(attempt, int(row["max_attempts"])) == RunStatus.QUEUED
+            and status_after_failure(attempt, int(row["max_attempts"]), transient=transient) == RunStatus.QUEUED
         )
+        available_at = None
+        if requeue:
+            delay = retry_delay_seconds(
+                attempt,
+                self._settings.run_retry_base_seconds,
+                self._settings.run_retry_max_seconds,
+            )
+            available_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         logger.warning(
-            "run.failed runId=%s attempt=%s requeue=%s error=%s",
+            "run.failed runId=%s attempt=%s requeue=%s code=%s reason=%s",
             row["run_id"],
             attempt,
             requeue,
-            type(exc).__name__,
+            code,
+            message,
         )
-        await self._runs.mark_failed(row["run_id"], str(exc), requeue=requeue)
+        wrote = await self._runs.mark_failed(
+            row["run_id"],
+            message,
+            error_code=code,
+            requeue=requeue,
+            worker_id=row["worker_id"] or "",
+            attempt=attempt,
+            available_at=available_at,
+        )
+        if not wrote:
+            logger.warning(
+                "run.failure_ignored runId=%s workerId=%s attempt=%s code=%s",
+                row["run_id"],
+                row["worker_id"],
+                attempt,
+                code,
+            )
+        return code, message
 
     @staticmethod
     def _log_started(row, request: CreateRunRequest, dispatch: str) -> None:
@@ -451,6 +488,7 @@ class AgentExecutionService:
             input=row["input"],
             output=row["output"],
             error=row["error"],
+            error_code=row["error_code"] if "error_code" in row.keys() else None,
             revision_id=row["revision_id"],
             manifest_hash=row["manifest_hash"] or "",
             attempt=row["attempt"] or 0,
